@@ -1,5 +1,9 @@
 import { log } from "./logger.js";
-import { HttpError, PaperclipClient } from "./paperclip-client.js";
+import {
+  HttpError,
+  PaperclipClient,
+  WATCHER_RECOVERY_TITLE_PREFIX,
+} from "./paperclip-client.js";
 import type { IssueSummary, WatcherConfig } from "./types.js";
 
 export function isMissingDisposition(issue: IssueSummary): boolean {
@@ -7,6 +11,10 @@ export function isMissingDisposition(issue: IssueSummary): boolean {
     issue.blockedInboxAttention?.state === "missing_disposition" ||
     issue.blockedInboxAttention?.reason === "missing_successful_run_disposition"
   );
+}
+
+export function isWatcherRecoveryIssue(issue: IssueSummary): boolean {
+  return issue.title?.startsWith(WATCHER_RECOVERY_TITLE_PREFIX) === true;
 }
 
 export class PaperclipWatcher {
@@ -41,6 +49,15 @@ export class PaperclipWatcher {
     const activeActionIds = new Set<string>();
 
     for (const issue of candidates) {
+      if (isWatcherRecoveryIssue(issue)) {
+        log("warn", "Watcher recovery task itself is missing a disposition; nested escalation suppressed", {
+          issueId: issue.id,
+          identifier: issue.identifier ?? null,
+          ceoAgentId: this.config.ceoAgentId,
+        });
+        continue;
+      }
+
       try {
         const recovery = await this.client.getRecoveryActions(issue.id);
         const active = recovery.active;
@@ -59,7 +76,7 @@ export class PaperclipWatcher {
         }
 
         if (this.config.dryRun) {
-          log("info", "Dry run: would wake CEO for missing disposition", {
+          log("info", "Dry run: would create CEO recovery task", {
             issueId: issue.id,
             identifier: issue.identifier ?? null,
             recoveryActionId: active.id,
@@ -67,35 +84,44 @@ export class PaperclipWatcher {
           continue;
         }
 
-        const wake = await this.client.wakeCeo({ issue, recoveryActionId: active.id });
-        if (wake?.status === "skipped") {
-          log("warn", "CEO wakeup was skipped; will retry on a later poll", {
+        const recoveryIssue = await this.client.createCeoRecoveryIssue({
+          companyId,
+          issue,
+          recovery: active,
+        });
+        this.escalatedActionIds.add(active.id);
+
+        if (recoveryIssue.deduplicated === true) {
+          log("info", "CEO recovery task already exists", {
             issueId: issue.id,
             identifier: issue.identifier ?? null,
             recoveryActionId: active.id,
-            reason: wake.reason ?? null,
-            message: wake.message ?? null,
+            recoveryIssueId: recoveryIssue.id,
+            recoveryIssueIdentifier: recoveryIssue.identifier ?? null,
+            deduplicationReason: recoveryIssue.deduplicationReason ?? null,
           });
           continue;
         }
-        this.escalatedActionIds.add(active.id);
+
         escalated += 1;
-        log("info", "Escalated missing disposition to CEO", {
+        log("info", "Created CEO recovery task for missing disposition", {
           issueId: issue.id,
           identifier: issue.identifier ?? null,
           recoveryActionId: active.id,
+          recoveryIssueId: recoveryIssue.id,
+          recoveryIssueIdentifier: recoveryIssue.identifier ?? null,
           ceoAgentId: this.config.ceoAgentId,
         });
       } catch (error) {
         if (error instanceof HttpError) {
-          log("warn", "Failed to escalate one issue; will retry on a later poll", {
+          log("warn", "Failed to create CEO recovery task; will retry on a later poll", {
             issueId: issue.id,
             identifier: issue.identifier ?? null,
             status: error.status,
             responseBody: error.body.slice(0, 1000),
           });
         } else {
-          log("warn", "Failed to escalate one issue; will retry on a later poll", {
+          log("warn", "Failed to create CEO recovery task; will retry on a later poll", {
             issueId: issue.id,
             identifier: issue.identifier ?? null,
             error: error instanceof Error ? error.message : String(error),

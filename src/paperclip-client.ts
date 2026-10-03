@@ -1,12 +1,15 @@
 import type {
   AgentSummary,
+  CreatedIssueResponse,
   IssueSummary,
+  RecoveryAction,
   RecoveryActionsResponse,
-  WakeupResponse,
   WatcherConfig,
 } from "./types.js";
 
 export type FetchLike = typeof fetch;
+
+export const WATCHER_RECOVERY_TITLE_PREFIX = "[Paperclip Watcher Recovery]";
 
 export class HttpError extends Error {
   constructor(
@@ -61,17 +64,16 @@ export class PaperclipClient {
 
   async listBlockedIssues(companyId: string): Promise<IssueSummary[]> {
     const all: IssueSummary[] = [];
-    let afterId: string | undefined;
+    let offset = 0;
 
     for (;;) {
+      // Paperclip's blocked-attention list explicitly rejects ID ordering and
+      // afterId cursors. It uses canonical activity ordering and offset paging.
       const params = new URLSearchParams({
         attention: "blocked",
-        includeBlockedInboxAttention: "true",
         limit: String(this.config.pageSize),
-        sortField: "id",
-        sortDir: "asc",
+        offset: String(offset),
       });
-      if (afterId) params.set("afterId", afterId);
 
       const page = await this.request<IssueSummary[]>(
         `/api/companies/${encodeURIComponent(companyId)}/issues?${params.toString()}`,
@@ -79,9 +81,7 @@ export class PaperclipClient {
       all.push(...page);
 
       if (page.length < this.config.pageSize) break;
-      const last = page.at(-1);
-      if (!last?.id || last.id === afterId) break;
-      afterId = last.id;
+      offset += page.length;
     }
 
     return all;
@@ -93,27 +93,52 @@ export class PaperclipClient {
     );
   }
 
-  wakeCeo(input: {
+  createCeoRecoveryIssue(input: {
+    companyId: string;
     issue: IssueSummary;
-    recoveryActionId: string;
-  }): Promise<WakeupResponse> {
+    recovery: RecoveryAction;
+  }): Promise<CreatedIssueResponse> {
     const issueLabel = input.issue.identifier ?? input.issue.id;
-    return this.request<WakeupResponse>(`/api/agents/${encodeURIComponent(this.config.ceoAgentId)}/wakeup`, {
-      method: "POST",
-      body: JSON.stringify({
-        source: "automation",
-        triggerDetail: "system",
-        reason: "missing_disposition_escalation",
-        payload: {
-          issueId: input.issue.id,
-          issueIdentifier: input.issue.identifier ?? null,
-          recoveryActionId: input.recoveryActionId,
-          recoveryKind: "missing_disposition",
-          watcher: "paperclip-watcher",
-          instruction: `Paperclip detected a missing disposition for ${issueLabel}. Inspect the source issue and recovery evidence, determine the correct disposition, and resolve the recovery without taking ownership of the source task unless that is an explicit decision.`,
-        },
-        idempotencyKey: `paperclip-watcher:missing-disposition:${input.recoveryActionId}`,
-      }),
-    });
+    const evidence = input.recovery.evidence ?? {};
+    const failureSummary =
+      typeof evidence.failureSummary === "string" ? evidence.failureSummary.trim() : "";
+
+    const description = [
+      "Paperclip detected that a task run ended without a valid final disposition.",
+      "",
+      `Source issue: ${issueLabel}`,
+      `Source issue ID: ${input.issue.id}`,
+      ...(input.issue.title ? [`Source title: ${input.issue.title}`] : []),
+      `Source status: ${input.issue.status ?? "unknown"}`,
+      `Source assignee agent ID: ${input.issue.assigneeAgentId ?? "unassigned"}`,
+      `Recovery action ID: ${input.recovery.id}`,
+      `Recovery kind: ${input.recovery.kind}`,
+      ...(input.recovery.cause ? [`Recovery cause: ${input.recovery.cause}`] : []),
+      ...(failureSummary ? [`Failure summary: ${failureSummary}`] : []),
+      ...(input.recovery.nextAction ? [`Paperclip next action: ${input.recovery.nextAction}`] : []),
+      "",
+      "CEO recovery instructions:",
+      "1. Re-read the source issue and its current recovery action before acting. If this recovery is already stale/resolved, do not change the source issue.",
+      "2. Inspect the source task, run result, comments, and recovery evidence and determine the correct source disposition.",
+      "3. Resolve the active source recovery and apply the appropriate source status using Paperclip's normal control-plane tools.",
+      "4. Do not take ownership of the source task merely to perform this recovery. Preserve its existing assignee unless reassignment is an explicit recovery decision.",
+      "5. When the source recovery has been handled, mark this recovery task done.",
+    ].join("\n");
+
+    return this.request<CreatedIssueResponse>(
+      `/api/companies/${encodeURIComponent(input.companyId)}/issues`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          title: `${WATCHER_RECOVERY_TITLE_PREFIX} ${issueLabel}: missing disposition`,
+          description,
+          status: "todo",
+          priority: "high",
+          assigneeAgentId: this.config.ceoAgentId,
+          idempotencyKey: `paperclip-watcher:missing-disposition:${input.recovery.id}`,
+          allowDuplicate: true,
+        }),
+      },
+    );
   }
 }

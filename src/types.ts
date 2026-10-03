@@ -24,7 +24,11 @@ export interface RecoveryAction {
   kind: string;
   status?: string | null;
   ownerType?: string | null;
+  ownerAgentId?: string | null;
   sourceIssueId?: string | null;
+  cause?: string | null;
+  nextAction?: string | null;
+  evidence?: Record<string, unknown> | null;
 }
 
 export interface RecoveryActionsResponse {
@@ -32,11 +36,12 @@ export interface RecoveryActionsResponse {
   actions?: RecoveryAction[];
 }
 
-export interface WakeupResponse {
-  status?: string | null;
-  reason?: string | null;
-  message?: string | null;
-  id?: string | null;
+export interface CreatedIssueResponse {
+  id: string;
+  identifier?: string | null;
+  title?: string | null;
+  deduplicated?: boolean;
+  deduplicationReason?: string | null;
 }
 
 export interface WatcherConfig {
