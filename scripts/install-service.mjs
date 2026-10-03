@@ -39,13 +39,13 @@ if (!serviceUser || serviceUser === "root") {
 const systemdQuote = (value) => `"${value.replace(/([\\"])/g, "\\$1")}"`;
 const service = readFileSync(serviceTemplatePath, "utf8")
   .replaceAll("@@USER@@", serviceUser)
-  .replaceAll("@@WORKING_DIRECTORY@@", systemdQuote(projectDir))
+  .replaceAll("@@WORKING_DIRECTORY@@", projectDir)
   .replaceAll("@@NODE@@", systemdQuote(process.execPath))
   .replaceAll("@@ENTRYPOINT@@", systemdQuote(distPath));
 
 const tempDir = mkdtempSync(join(tmpdir(), "paperclip-watcher-"));
 const tempService = join(tempDir, "paperclip-watcher.service");
-writeFileSync(tempService, service, { mode: 0o644 });
+writeFileSync(tempService, service, { mode: 0o644 });\n\nexecFileSync("systemd-analyze", ["verify", tempService], { stdio: "inherit" });
 
 function sudo(...args) {
   execFileSync("sudo", args, { stdio: "inherit" });
