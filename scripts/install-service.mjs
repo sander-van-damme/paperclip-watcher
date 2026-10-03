@@ -45,7 +45,9 @@ const service = readFileSync(serviceTemplatePath, "utf8")
 
 const tempDir = mkdtempSync(join(tmpdir(), "paperclip-watcher-"));
 const tempService = join(tempDir, "paperclip-watcher.service");
-writeFileSync(tempService, service, { mode: 0o644 });\n\nexecFileSync("systemd-analyze", ["verify", tempService], { stdio: "inherit" });
+writeFileSync(tempService, service, { mode: 0o644 });
+
+execFileSync("systemd-analyze", ["verify", tempService], { stdio: "inherit" });
 
 function sudo(...args) {
   execFileSync("sudo", args, { stdio: "inherit" });
