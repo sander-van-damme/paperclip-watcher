@@ -1,0 +1,25 @@
+{
+  "name": "paperclip-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "External watcher that escalates Paperclip missing-disposition recoveries to a CEO agent.",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --env-file=.env --import tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test test/*.test.ts",
+    "check": "npm run build && npm test",
+    "install-service": "npm run build && node scripts/install-service.mjs",
+    "service:status": "systemctl status paperclip-watcher.service --no-pager",
+    "service:logs": "journalctl -u paperclip-watcher.service -f"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
