@@ -8,6 +8,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectDir = resolve(scriptDir, "..");
 const envPath = join(projectDir, ".env");
 const distPath = join(projectDir, "dist", "index.js");
+const serviceTemplatePath = join(projectDir, "systemd", "paperclip-watcher.service");
 
 function fail(message) {
   console.error(`\n${message}\n`);
@@ -19,6 +20,7 @@ if (!existsSync(envPath)) {
   fail("Missing .env. Copy .env.example to .env, configure Paperclip, then run npm run install-service again.");
 }
 if (!existsSync(distPath)) fail("dist/index.js is missing. npm run install-service should build it automatically.");
+if (!existsSync(serviceTemplatePath)) fail("systemd/paperclip-watcher.service is missing.");
 
 const envText = readFileSync(envPath, "utf8");
 for (const name of ["PAPERCLIP_API_URL", "PAPERCLIP_API_KEY", "PAPERCLIP_CEO_AGENT_ID"]) {
@@ -34,8 +36,12 @@ if (!serviceUser || serviceUser === "root") {
   fail("Run npm run install-service as the normal user that should own the watcher. The installer invokes sudo itself.");
 }
 
-const nodePath = process.execPath;
-const service = `[Unit]\nDescription=Paperclip missing-disposition watcher\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${serviceUser}\nWorkingDirectory=${projectDir}\nEnvironmentFile=/etc/paperclip-watcher.env\nExecStart=${nodePath} ${distPath}\nRestart=on-failure\nRestartSec=5s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\nProtectHome=read-only\n\n[Install]\nWantedBy=multi-user.target\n`;
+const systemdQuote = (value) => `"${value.replace(/([\\"])/g, "\\$1")}"`;
+const service = readFileSync(serviceTemplatePath, "utf8")
+  .replaceAll("@@USER@@", serviceUser)
+  .replaceAll("@@WORKING_DIRECTORY@@", systemdQuote(projectDir))
+  .replaceAll("@@NODE@@", systemdQuote(process.execPath))
+  .replaceAll("@@ENTRYPOINT@@", systemdQuote(distPath));
 
 const tempDir = mkdtempSync(join(tmpdir(), "paperclip-watcher-"));
 const tempService = join(tempDir, "paperclip-watcher.service");

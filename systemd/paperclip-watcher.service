@@ -1,0 +1,20 @@
+[Unit]
+Description=Paperclip missing-disposition watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+WorkingDirectory=@@WORKING_DIRECTORY@@
+EnvironmentFile=/etc/paperclip-watcher.env
+ExecStart=@@NODE@@ @@ENTRYPOINT@@
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
