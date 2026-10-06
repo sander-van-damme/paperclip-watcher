@@ -139,29 +139,12 @@ function json(response: ServerResponse, status: number, value: unknown): void {
   response.end(body);
 }
 
-function isLoopbackHost(host: string): boolean {
-  return host === "127.0.0.1" || host === "::1" || host === "localhost";
-}
-
-function httpPort(): number {
-  const raw = process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_PORT?.trim();
-  if (!raw) return 18787;
-  const port = Number.parseInt(raw, 10);
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
-    throw new Error("PAPERCLIP_WATCHER_EXPORT_HTTP_PORT must be between 1 and 65535");
-  }
-  return port;
-}
-
 export async function startExportHttpServer(): Promise<Server> {
   const enabled = (process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED?.trim().toLowerCase() ?? "true") !== "false";
   if (!enabled) throw new Error("Export HTTP server is disabled");
 
-  const host = process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_HOST?.trim() || "127.0.0.1";
-  if (!isLoopbackHost(host)) {
-    throw new Error("Export HTTP server only supports loopback hosts; use an SSH tunnel for remote access.");
-  }
-  const port = httpPort();
+  const host = "0.0.0.0";
+  const port = 18787;
   const settings = resolveExportSettings();
   const state: ExportState = {
     running: false,
