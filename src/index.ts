@@ -24,7 +24,13 @@ async function main(): Promise<void> {
   const exportHttpEnabled =
     (process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED?.trim().toLowerCase() ?? "true") !== "false";
   if (exportHttpEnabled) {
-    exportServer = await startExportHttpServer();
+    try {
+      exportServer = await startExportHttpServer();
+    } catch (error) {
+      log("error", "Support export UI failed to start; watcher will continue", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   const stop = (signal: string) => {
