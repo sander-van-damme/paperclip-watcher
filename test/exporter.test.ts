@@ -95,7 +95,7 @@ test("database sanitizer also redacts Paperclip JavaScript-backup INSERT rows", 
   const input = join(dir, "raw.sql.gz");
   const output = join(dir, "sanitized.sql.gz");
   const sql = [
-    'INSERT INTO "public"."company_secret_versions" ("id", "secret_id", "version", "material", "status") VALUES ($paperclip$v1$paperclip$, $paperclip$s1$paperclip$, 1, $paperclip$${"ciphertext":"top-secret"}$paperclip$, $paperclip$current$paperclip$);',
+    'INSERT INTO "public"."company_secret_versions" ("id", "secret_id", "version", "material", "status") VALUES ($paperclip$v1$paperclip$, $paperclip$s1$paperclip$, 1, $paperclip${"ciphertext":"top-secret"}$paperclip$, $paperclip$current$paperclip$);',
     'INSERT INTO "public"."account" ("id", "access_token", "refresh_token", "password") VALUES ($paperclip$a1$paperclip$, $paperclip$access-secret$paperclip$, $paperclip$refresh-secret$paperclip$, $paperclip$password-secret$paperclip$);',
     "",
   ].join("\n");
