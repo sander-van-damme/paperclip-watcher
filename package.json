@@ -16,7 +16,7 @@
     "install-service": "npm run build && node scripts/install-service.mjs",
     "service:status": "systemctl status paperclip-watcher.service --no-pager",
     "service:logs": "journalctl -u paperclip-watcher.service -f",
-    "export": "npm run build && node dist/export-cli.js"
+    "export": "npm run build && node --env-file=.env dist/export-cli.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
