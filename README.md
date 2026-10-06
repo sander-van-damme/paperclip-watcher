@@ -89,17 +89,15 @@ npm run export
 
 The generated archive is written to `.paperclip-exports/` when run manually. Under the systemd service it defaults to `/var/lib/paperclip-watcher/exports`.
 
-While the watcher is running, open:
+While the watcher is running, open port **18787** on the watcher's LAN address, for example:
 
 ```text
-http://127.0.0.1:18787/
+http://192.168.1.50:18787/
 ```
 
-The HTML page can create new exports and download existing `.tar.gz` bundles. The HTTP interface is intentionally loopback-only. For a remote server, use an SSH tunnel instead of exposing the endpoint publicly:
+The HTML page listens on all network interfaces (`0.0.0.0:18787`) and can create new exports and download existing `.tar.gz` bundles. The port is fixed and is not configurable through environment variables.
 
-```bash
-ssh -L 18787:127.0.0.1:18787 your-server
-```
+Because the interface can generate and download debugging bundles, treat port 18787 as a trusted-LAN endpoint and restrict it with your host/network firewall if the machine is reachable from untrusted networks.
 
 ### What is exported
 
@@ -120,11 +118,11 @@ Optional settings:
 
 ```dotenv
 PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED=true
-PAPERCLIP_WATCHER_EXPORT_HTTP_HOST=127.0.0.1
-PAPERCLIP_WATCHER_EXPORT_HTTP_PORT=18787
 PAPERCLIP_WATCHER_EXPORT_KEEP=5
 # PAPERCLIP_WATCHER_EXPORT_DIR=/path/to/exports
 ```
+
+The HTTP listener is fixed at `0.0.0.0:18787`.
 
 ## Install as a systemd service
 
