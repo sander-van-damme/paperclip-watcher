@@ -17,7 +17,7 @@ import { once } from "node:events";
 import { createGunzip, createGzip } from "node:zlib";
 
 const SENSITIVE_ENV_NAME = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|DATABASE_URL)$/i;
-const SENSITIVE_OBJECT_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|credential|private[_-]?key|connection[_-]?string|database[_-]?url|ciphertext|material)$/i;
+const SENSITIVE_OBJECT_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|client[_-]?secret|secret|password|passwd|credential|private[_-]?key|connection[_-]?string|database[_-]?url|ciphertext|material)$/i;
 const SENSITIVE_DB_COLUMNS = new Set([
   "api_key",
   "access_token",
