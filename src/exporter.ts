@@ -125,10 +125,17 @@ export function redactText(input: string): string {
   }
 
   return text
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[REDACTED]")
     .replace(/((?:postgres(?:ql)?|mysql|mariadb):\/\/[^:\s/]+:)[^@\s/]+@/gi, "$1[REDACTED]@")
-    .replace(/(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|credential|private[_-]?key|database[_-]?url)\b["']?\s*[:=]\s*["']?)([^"',\s}\]]{6,})/gi, "$1[REDACTED]")
+    .replace(/(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|client[_-]?secret|secret|password|passwd|credential|private[_-]?key|database[_-]?url)\b["']?\s*[:=]\s*["']?)([^"',\s}\]]{6,})/gi, "$1[REDACTED]")
     .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/\bgsk_[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_GROQ_KEY]")
+    .replace(/\bnvapi-[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_NVIDIA_KEY]")
+    .replace(/\bhf_[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_HUGGINGFACE_TOKEN]")
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED_SLACK_TOKEN]")
+    .replace(/\bAIza[0-9A-Za-z_-]{30,}\b/g, "[REDACTED_GOOGLE_API_KEY]")
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED_AWS_ACCESS_KEY_ID]")
     .replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "[REDACTED_GITHUB_TOKEN]")
     .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]")
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_JWT]");
@@ -556,6 +563,31 @@ export async function createExportBundle(settings = resolveExportSettings()): Pr
       );
     }
 
+    try {
+      const instanceEnv = await readFile(join(instanceRoot, ".env"), "utf8");
+      await writeFile(
+        join(paperclipDir, "env.sanitized"),
+        redactText(instanceEnv),
+        { mode: 0o600 },
+      );
+    } catch {
+      // Instance .env is optional.
+    }
+
+    await writeFile(
+      join(paperclipDir, "process-environment.sanitized.json"),
+      JSON.stringify(sanitizeJson(process.env), null, 2),
+      { mode: 0o600 },
+    );
+
+    const secretsDir = join(paperclipDir, "secrets");
+    await mkdir(secretsDir, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(secretsDir, "master.key.REDACTED.txt"),
+      "[REDACTED: Paperclip secrets master key intentionally not exported]\n",
+      { mode: 0o600 },
+    );
+
     await copySanitizedTree(join(instanceRoot, "logs"), join(paperclipDir, "logs"), omitted, "logs");
     await copySanitizedTree(join(instanceRoot, "data", "storage"), join(paperclipDir, "storage"), omitted, "storage");
     await writeFile(
@@ -576,14 +608,15 @@ export async function createExportBundle(settings = resolveExportSettings()): Pr
         knownSecretColumnsRedacted: true,
         configAndTextFilesRedacted: true,
         environmentSecretValuesRedactedWhenKnown: true,
-        envFilesIncluded: false,
-        secretKeyFilesIncluded: false,
+        envFilesIncludedAsSanitizedCopies: true,
+        secretKeyRepresentedByRedactedPlaceholder: true,
         binaryFilesIncluded: false,
       },
       omitted,
       notes: [
         "The database dump preserves rows and schema but redacts known secret-bearing columns.",
         "Text logs/config/storage files are retained with credential-pattern and environment-value redaction.",
+        "Environment files are included only as sanitized copies; the secrets master key is represented by a redacted placeholder.",
         "Binary files are omitted because arbitrary binary data cannot be safely redacted.",
         "Redaction is defense-in-depth and cannot prove that arbitrary user-authored prose never contains a credential.",
       ],
