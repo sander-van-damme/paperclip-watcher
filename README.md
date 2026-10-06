@@ -92,13 +92,13 @@ The generated archive is written to `.paperclip-exports/` when run manually. Und
 While the watcher is running, open:
 
 ```text
-http://127.0.0.1:8787/
+http://127.0.0.1:18787/
 ```
 
 The HTML page can create new exports and download existing `.tar.gz` bundles. The HTTP interface is intentionally loopback-only. For a remote server, use an SSH tunnel instead of exposing the endpoint publicly:
 
 ```bash
-ssh -L 8787:127.0.0.1:8787 your-server
+ssh -L 18787:127.0.0.1:18787 your-server
 ```
 
 ### What is exported
@@ -121,7 +121,7 @@ Optional settings:
 ```dotenv
 PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED=true
 PAPERCLIP_WATCHER_EXPORT_HTTP_HOST=127.0.0.1
-PAPERCLIP_WATCHER_EXPORT_HTTP_PORT=8787
+PAPERCLIP_WATCHER_EXPORT_HTTP_PORT=18787
 PAPERCLIP_WATCHER_EXPORT_KEEP=5
 # PAPERCLIP_WATCHER_EXPORT_DIR=/path/to/exports
 ```
