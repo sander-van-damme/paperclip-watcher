@@ -96,8 +96,11 @@ export function resolveExportSettings(): ExportSettings {
     process.env.PAPERCLIP_CONFIG?.trim()
       || join(paperclipHome, "instances", instanceId, "config.json"),
   );
-  const defaultOutputDir = process.env.PAPERCLIP_WATCHER_STATE_DIR?.trim()
-    || (process.env.INVOCATION_ID ? "/var/lib/paperclip-watcher/exports" : join(process.cwd(), ".paperclip-exports"));
+  const stateRoot = process.env.PAPERCLIP_WATCHER_STATE_DIR?.trim()
+    || process.env.STATE_DIRECTORY?.split(":")[0]?.trim();
+  const defaultOutputDir = stateRoot
+    ? join(stateRoot, "exports")
+    : join(process.cwd(), ".paperclip-exports");
 
   return {
     outputDir: resolve(process.env.PAPERCLIP_WATCHER_EXPORT_DIR?.trim() || defaultOutputDir),
