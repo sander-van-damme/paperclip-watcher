@@ -22,6 +22,7 @@ const SENSITIVE_DB_COLUMNS = new Set([
   "api_key",
   "access_token",
   "refresh_token",
+  "id_token",
   "token",
   "password",
   "passwd",
@@ -38,6 +39,8 @@ const SENSITIVE_DB_TABLE_COLUMNS = new Map<string, Set<string>>([
   ["company_secret_versions", new Set(["material"])],
   ["company_secret_proposals", new Set(["value_ciphertext"])],
   ["company_secret_provider_configs", new Set(["config"])],
+  ["chat_teams_file_transfers", new Set(["private_state"])],
+  ["verification", new Set(["value"])],
 ]);
 const JSON_REDACTION = JSON.stringify({ redacted: true, source: "paperclip-watcher-export" });
 
@@ -220,7 +223,7 @@ function parseCopyHeader(line: string): CopyContext | null {
 
   columns.forEach((column, index) => {
     if (tableColumns?.has(column)) {
-      redactIndexes.set(index, ["material", "value_ciphertext", "config"].includes(column) ? "json" : "text");
+      redactIndexes.set(index, ["material", "value_ciphertext", "config", "private_state"].includes(column) ? "json" : "text");
       return;
     }
     if (SENSITIVE_DB_COLUMNS.has(column)) {
@@ -242,12 +245,90 @@ function redactCopyRow(line: string, context: CopyContext): string {
   ).join("\t");
 }
 
+function splitSqlValues(input: string): string[] | null {
+  const values: string[] = [];
+  let start = 0;
+  let index = 0;
+  let dollarTag: string | null = null;
+  let singleQuoted = false;
+
+  while (index < input.length) {
+    if (dollarTag) {
+      if (input.startsWith(dollarTag, index)) {
+        index += dollarTag.length;
+        dollarTag = null;
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+
+    const char = input[index]!;
+    if (singleQuoted) {
+      if (char === "'" && input[index + 1] === "'") {
+        index += 2;
+        continue;
+      }
+      if (char === "'") singleQuoted = false;
+      index += 1;
+      continue;
+    }
+
+    if (char === "'") {
+      singleQuoted = true;
+      index += 1;
+      continue;
+    }
+
+    if (char === "$") {
+      const rest = input.slice(index);
+      const match = rest.match(/^\$[A-Za-z0-9_]*\$/);
+      if (match) {
+        dollarTag = match[0];
+        index += dollarTag.length;
+        continue;
+      }
+    }
+
+    if (char === ",") {
+      values.push(input.slice(start, index).trim());
+      start = index + 1;
+    }
+    index += 1;
+  }
+
+  if (dollarTag || singleQuoted) return null;
+  values.push(input.slice(start).trim());
+  return values;
+}
+
 function redactInsertStatement(line: string): string {
   const match = line.match(/^INSERT\s+INTO\s+(.+?)\s*\((.+)\)\s+VALUES\s*\((.*)\);$/i);
   if (!match) return redactText(line);
-  // Paperclip normally emits pg_dump/COPY backups. For JS fallback INSERTs,
-  // preserve the statement and apply conservative textual credential redaction.
-  return redactText(line);
+
+  const qualified = match[1]!.trim();
+  const table = unquoteIdentifier(qualified.split(".").at(-1)!);
+  const columns = match[2]!.split(",").map((column) => unquoteIdentifier(column));
+  const values = splitSqlValues(match[3]!);
+  if (!values || values.length !== columns.length) return redactText(line);
+
+  const tableColumns = SENSITIVE_DB_TABLE_COLUMNS.get(table);
+  columns.forEach((column, index) => {
+    if (values[index] === undefined || /^NULL$/i.test(values[index]!)) return;
+    const tableSensitive = tableColumns?.has(column) ?? false;
+    const genericSensitive = SENSITIVE_DB_COLUMNS.has(column);
+    if (!tableSensitive && !genericSensitive) {
+      values[index] = redactText(values[index]!);
+      return;
+    }
+
+    const json = ["material", "value_ciphertext", "config", "private_state"].includes(column);
+    values[index] = json
+      ? `'${JSON_REDACTION.replaceAll("'", "''")}'`
+      : "'[REDACTED]'";
+  });
+
+  return `INSERT INTO ${qualified} (${match[2]!}) VALUES (${values.join(", ")});`;
 }
 
 export async function sanitizeDatabaseBackup(inputPath: string, outputPath: string): Promise<void> {
