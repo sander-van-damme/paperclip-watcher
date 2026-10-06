@@ -79,7 +79,7 @@ npm run dev
 
 ## Support export and download UI
 
-The watcher can create a full Paperclip debugging bundle with the database, run logs, sanitized configuration, diagnostics, and text-based storage files.
+The watcher can create a fast raw Paperclip debugging bundle with the database, run logs, configuration, diagnostics, and storage files.
 
 Create one from the shell:
 
@@ -108,11 +108,11 @@ Because the interface can generate and download debugging bundles, treat port 18
 - text-based files from Paperclip storage;
 - a storage manifest and export manifest.
 
-The exporter **preserves database rows** rather than dropping secret tables. Known secret-bearing columns (for example secret material, OAuth/session tokens, passwords, provider credentials, proposal ciphertext, and private transfer state) are replaced with `[REDACTED]` or a redacted JSON placeholder. Logs, config, and text storage are also scrubbed for known environment secret values and common credential formats.
+The exporter performs **no content sanitization**. The database backup is copied directly into the bundle without decompressing, parsing, redacting, and recompressing it. Logs, configuration, diagnostics, environment values, and storage are copied raw.
 
-Binary storage files are listed in the manifest but omitted because arbitrary binary content cannot be reliably scrubbed without risking secret leakage. Environment files are included only as sanitized copies. The Paperclip secrets master key is represented by a placeholder file; the real key is never included.
+Binary storage files are included. The one explicit exclusion is Paperclip's `secrets/master.key`; the bundle contains a placeholder noting that it was omitted.
 
-Redaction is defense-in-depth: arbitrary user-authored text can contain credentials in formats the scrubber cannot recognize. Review a bundle before sharing it outside a trusted debugging context.
+**Treat generated archives as sensitive.** This raw mode is intended for trusted local/test environments and should not be shared outside that context.
 
 Optional settings:
 
