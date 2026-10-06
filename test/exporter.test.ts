@@ -36,6 +36,7 @@ test("sanitizeJson redacts sensitive values without removing object structure", 
     apiKey: "secret-value",
     nested: {
       token: "token-value",
+      clientSecret: "client-secret-value",
       model: "gpt-test",
     },
   }), {
@@ -43,6 +44,7 @@ test("sanitizeJson redacts sensitive values without removing object structure", 
     apiKey: "[REDACTED]",
     nested: {
       token: "[REDACTED]",
+      clientSecret: "[REDACTED]",
       model: "gpt-test",
     },
   });
@@ -82,6 +84,41 @@ test("database sanitizer preserves secret rows and redacts secret-bearing column
 
     assert.doesNotMatch(sanitized, /very-secret-ciphertext/);
     assert.doesNotMatch(sanitized, /AKIASECRET/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("database sanitizer also redacts Paperclip JavaScript-backup INSERT rows", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "paperclip-watcher-export-insert-test-"));
+  const input = join(dir, "raw.sql.gz");
+  const output = join(dir, "sanitized.sql.gz");
+  const sql = [
+    'INSERT INTO "public"."company_secret_versions" ("id", "secret_id", "version", "material", "status") VALUES ($paperclip$v1$paperclip$, $paperclip$s1$paperclip$, 1, $paperclip$${"ciphertext":"top-secret"}$paperclip$, $paperclip$current$paperclip$);',
+    'INSERT INTO "public"."account" ("id", "access_token", "refresh_token", "password") VALUES ($paperclip$a1$paperclip$, $paperclip$access-secret$paperclip$, $paperclip$refresh-secret$paperclip$, $paperclip$password-secret$paperclip$);',
+    "",
+  ].join("\n");
+
+  try {
+    const source = join(dir, "raw.sql");
+    await writeFile(source, sql);
+    await pipeline(createReadStream(source), createGzip(), createWriteStream(input));
+    await sanitizeDatabaseBackup(input, output);
+
+    const chunks: Buffer[] = [];
+    const stream = createReadStream(output).pipe(createGunzip());
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    const sanitized = Buffer.concat(chunks).toString("utf8");
+
+    assert.match(sanitized, /company_secret_versions/);
+    assert.match(sanitized, /account/);
+    assert.match(sanitized, /\[REDACTED\]/);
+    assert.match(sanitized, /"redacted":true/);
+    assert.doesNotMatch(sanitized, /top-secret/);
+    assert.doesNotMatch(sanitized, /access-secret/);
+    assert.doesNotMatch(sanitized, /refresh-secret/);
+    assert.doesNotMatch(sanitized, /password-secret/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
