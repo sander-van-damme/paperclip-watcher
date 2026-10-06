@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, accessSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,21 @@ const projectDir = resolve(scriptDir, "..");
 const envPath = join(projectDir, ".env");
 const distPath = join(projectDir, "dist", "index.js");
 const serviceTemplatePath = join(projectDir, "systemd", "paperclip-watcher.service");
+
+function resolveExecutable(command) {
+  try {
+    const resolved = execFileSync("/bin/sh", ["-c", "command -v \"$1\"", "sh", command], {
+      encoding: "utf8",
+      env: process.env,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!resolved) return null;
+    accessSync(resolved, constants.X_OK);
+    return resolve(resolved);
+  } catch {
+    return null;
+  }
+}
 
 function fail(message) {
   console.error(`\n${message}\n`);
@@ -36,12 +51,32 @@ if (!serviceUser || serviceUser === "root") {
   fail("Run npm run install-service as the normal user that should own the watcher. The installer invokes sudo itself.");
 }
 
+const paperclipCliPath = resolveExecutable("paperclipai");
+if (!paperclipCliPath) {
+  fail(
+    "Could not resolve paperclipai from your current PATH. Make sure `paperclipai` works in this shell, then run npm run install-service again.",
+  );
+}
+
+const runtimePath = [
+  dirname(process.execPath),
+  dirname(paperclipCliPath),
+  "/usr/local/sbin",
+  "/usr/local/bin",
+  "/usr/sbin",
+  "/usr/bin",
+  "/sbin",
+  "/bin",
+].filter((value, index, values) => values.indexOf(value) === index).join(":");
+
 const systemdQuote = (value) => `"${value.replace(/([\\"])/g, "\\$1")}"`;
 const service = readFileSync(serviceTemplatePath, "utf8")
   .replaceAll("@@USER@@", serviceUser)
   .replaceAll("@@WORKING_DIRECTORY@@", projectDir)
   .replaceAll("@@NODE@@", systemdQuote(process.execPath))
-  .replaceAll("@@ENTRYPOINT@@", systemdQuote(distPath));
+  .replaceAll("@@ENTRYPOINT@@", systemdQuote(distPath))
+  .replaceAll("@@PAPERCLIP_CLI_ENV@@", systemdQuote(`PAPERCLIP_WATCHER_RESOLVED_CLI_BIN=${paperclipCliPath}`))
+  .replaceAll("@@RUNTIME_PATH_ENV@@", systemdQuote(`PATH=${runtimePath}`));
 
 const tempDir = mkdtempSync(join(tmpdir(), "paperclip-watcher-"));
 const tempService = join(tempDir, "paperclip-watcher.service");
@@ -55,6 +90,8 @@ function sudo(...args) {
 
 try {
   console.log(`Installing service for user ${serviceUser}...`);
+  console.log(`Paperclip CLI: ${paperclipCliPath}`);
+  console.log(`Node runtime:  ${process.execPath}`);
   sudo("install", "-m", "0644", tempService, "/etc/systemd/system/paperclip-watcher.service");
   sudo("install", "-m", "0600", envPath, "/etc/paperclip-watcher.env");
   sudo("systemctl", "daemon-reload");

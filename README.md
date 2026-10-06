@@ -135,13 +135,17 @@ npm run install-service
 This command:
 
 1. compiles the TypeScript project;
-2. verifies the generated unit with `systemd-analyze verify`;
-3. copies `.env` to `/etc/paperclip-watcher.env` with mode `0600`;
-4. installs `/etc/systemd/system/paperclip-watcher.service`;
-5. enables the service for boot;
-6. starts/restarts it immediately.
+2. resolves the absolute `paperclipai` CLI path from your current user shell;
+3. embeds that CLI path plus the Node/CLI runtime directories into the generated systemd service environment;
+4. verifies the generated unit with `systemd-analyze verify`;
+5. copies `.env` to `/etc/paperclip-watcher.env` with mode `0600`;
+6. installs `/etc/systemd/system/paperclip-watcher.service`;
+7. enables the service for boot;
+8. starts/restarts it immediately.
 
 The service itself runs as the user who invoked the installer, not as root.
+
+The installer intentionally resolves `paperclipai` at install time instead of relying on systemd's restricted default `PATH`. For example, a CLI installed at `~/.local/bin/paperclipai` will continue to work from the service even if `command -v paperclipai` would otherwise fail inside systemd.
 
 Useful commands:
 
