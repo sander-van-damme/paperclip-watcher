@@ -112,7 +112,7 @@ ssh -L 8787:127.0.0.1:8787 your-server
 
 The exporter **preserves database rows** rather than dropping secret tables. Known secret-bearing columns (for example secret material, OAuth/session tokens, passwords, provider credentials, proposal ciphertext, and private transfer state) are replaced with `[REDACTED]` or a redacted JSON placeholder. Logs, config, and text storage are also scrubbed for known environment secret values and common credential formats.
 
-Binary storage files are listed in the manifest but omitted because arbitrary binary content cannot be reliably scrubbed without risking secret leakage. The Paperclip secrets master key and environment files are never included.
+Binary storage files are listed in the manifest but omitted because arbitrary binary content cannot be reliably scrubbed without risking secret leakage. Environment files are included only as sanitized copies. The Paperclip secrets master key is represented by a placeholder file; the real key is never included.
 
 Redaction is defense-in-depth: arbitrary user-authored text can contain credentials in formats the scrubber cannot recognize. Review a bundle before sharing it outside a trusted debugging context.
 
