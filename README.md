@@ -103,9 +103,9 @@ Because the interface can generate and download debugging bundles, treat port 18
 
 - a Paperclip SQL database backup;
 - Paperclip run/server logs;
-- sanitized Paperclip configuration;
+- raw Paperclip configuration and environment information;
 - watcher journal output and Paperclip diagnostics;
-- text-based files from Paperclip storage;
+- Paperclip storage files, including binary files;
 - a storage manifest and export manifest.
 
 The exporter performs **no content sanitization**. The database backup is copied directly into the bundle without decompressing, parsing, redacting, and recompressing it. Logs, configuration, diagnostics, environment values, and storage are copied raw.
