@@ -105,7 +105,10 @@ export function resolveExportSettings(): ExportSettings {
   return {
     outputDir: resolve(process.env.PAPERCLIP_WATCHER_EXPORT_DIR?.trim() || defaultOutputDir),
     keep: positiveIntEnv("PAPERCLIP_WATCHER_EXPORT_KEEP", 5),
-    paperclipCli: process.env.PAPERCLIP_CLI_BIN?.trim() || "paperclipai",
+    paperclipCli:
+      process.env.PAPERCLIP_WATCHER_RESOLVED_CLI_BIN?.trim()
+      || process.env.PAPERCLIP_CLI_BIN?.trim()
+      || "paperclipai",
     paperclipHome,
     instanceId,
     configPath,
