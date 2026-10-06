@@ -1,53 +1,19 @@
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import {
   chmod,
+  cp,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { homedir, platform, release, tmpdir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
-import { once } from "node:events";
-import { createGunzip, createGzip } from "node:zlib";
-
-const SENSITIVE_ENV_NAME = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|DATABASE_URL)$/i;
-const SENSITIVE_OBJECT_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|client[_-]?secret|secret|password|passwd|credential|private[_-]?key|connection[_-]?string|database[_-]?url|ciphertext|material)$/i;
-const SENSITIVE_DB_COLUMNS = new Set([
-  "api_key",
-  "access_token",
-  "refresh_token",
-  "id_token",
-  "token",
-  "password",
-  "passwd",
-  "credential",
-  "credentials",
-  "private_key",
-  "client_secret",
-  "connection_string",
-  "database_url",
-  "value_ciphertext",
-  "material",
-]);
-const SENSITIVE_DB_TABLE_COLUMNS = new Map<string, Set<string>>([
-  ["company_secret_versions", new Set(["material"])],
-  ["company_secret_proposals", new Set(["value_ciphertext"])],
-  ["company_secret_provider_configs", new Set(["config"])],
-  ["chat_teams_file_transfers", new Set(["private_state"])],
-  ["verification", new Set(["value"])],
-]);
-const JSON_REDACTION = JSON.stringify({ redacted: true, source: "paperclip-watcher-export" });
-
-const TEXT_EXTENSIONS = new Set([
-  ".log", ".txt", ".json", ".jsonl", ".ndjson", ".md", ".csv", ".yaml", ".yml",
-  ".toml", ".ini", ".conf", ".html", ".xml", ".sql", ".js", ".ts", ".mjs", ".cjs",
-]);
+import { basename, dirname, join, resolve } from "node:path";
 
 export interface ExportSettings {
   outputDir: string;
@@ -71,12 +37,6 @@ interface CommandResult {
   code: number | null;
   stdout: string;
   stderr: string;
-}
-
-interface CopyContext {
-  table: string;
-  columns: string[];
-  redactIndexes: Map<number, "json" | "text">;
 }
 
 function positiveIntEnv(name: string, fallback: number): number {
@@ -115,57 +75,6 @@ export function resolveExportSettings(): ExportSettings {
   };
 }
 
-function sensitiveEnvValues(): Array<{ name: string; value: string }> {
-  return Object.entries(process.env)
-    .filter(([name, value]) =>
-      SENSITIVE_ENV_NAME.test(name) && typeof value === "string" && value.length >= 6
-    )
-    .map(([name, value]) => ({ name, value: value! }))
-    .sort((a, b) => b.value.length - a.value.length);
-}
-
-export function redactText(input: string): string {
-  let text = input;
-  for (const { name, value } of sensitiveEnvValues()) {
-    text = text.split(value).join(`[REDACTED_${name}]`);
-  }
-
-  return text
-    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[REDACTED]")
-    .replace(/((?:postgres(?:ql)?|mysql|mariadb):\/\/[^:\s/]+:)[^@\s/]+@/gi, "$1[REDACTED]@")
-    .replace(/(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|client[_-]?secret|secret|password|passwd|credential|private[_-]?key|database[_-]?url)\b["']?\s*[:=]\s*["']?)([^"',\s}\]]{6,})/gi, "$1[REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_OPENAI_KEY]")
-    .replace(/\bgsk_[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_GROQ_KEY]")
-    .replace(/\bnvapi-[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_NVIDIA_KEY]")
-    .replace(/\bhf_[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_HUGGINGFACE_TOKEN]")
-    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED_SLACK_TOKEN]")
-    .replace(/\bAIza[0-9A-Za-z_-]{30,}\b/g, "[REDACTED_GOOGLE_API_KEY]")
-    .replace(/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED_AWS_ACCESS_KEY_ID]")
-    .replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_JWT]");
-}
-
-function sanitizeValue(value: unknown, key?: string): unknown {
-  if (key && SENSITIVE_OBJECT_KEY.test(key)) return "[REDACTED]";
-  if (typeof value === "string") return redactText(value);
-  if (Array.isArray(value)) return value.map((entry) => sanitizeValue(entry));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
-        childKey,
-        sanitizeValue(childValue, childKey),
-      ]),
-    );
-  }
-  return value;
-}
-
-export function sanitizeJson(value: unknown): unknown {
-  return sanitizeValue(value);
-}
-
 async function runCommand(command: string, args: string[], timeoutMs = 120_000): Promise<CommandResult> {
   return await new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
@@ -192,13 +101,7 @@ async function runCommand(command: string, args: string[], timeoutMs = 120_000):
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolvePromise({
-        command,
-        args,
-        code,
-        stdout: redactText(stdout),
-        stderr: redactText(stderr),
-      });
+      resolvePromise({ command, args, code, stdout, stderr });
     });
   });
 }
@@ -216,228 +119,14 @@ async function writeCommandResult(path: string, result: CommandResult): Promise<
   );
 }
 
-function unquoteIdentifier(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1).replaceAll('""', '"');
-  }
-  return trimmed;
-}
-
-function parseCopyHeader(line: string): CopyContext | null {
-  const match = line.match(/^COPY\s+(.+?)\s*\((.+)\)\s+FROM\s+stdin;$/i);
-  if (!match) return null;
-
-  const qualified = match[1]!.trim();
-  const table = unquoteIdentifier(qualified.split(".").at(-1)!);
-  const columns = match[2]!.split(",").map((column) => unquoteIdentifier(column));
-  const tableColumns = SENSITIVE_DB_TABLE_COLUMNS.get(table);
-  const redactIndexes = new Map<number, "json" | "text">();
-
-  columns.forEach((column, index) => {
-    if (tableColumns?.has(column)) {
-      redactIndexes.set(index, ["material", "value_ciphertext", "config", "private_state"].includes(column) ? "json" : "text");
-      return;
-    }
-    if (SENSITIVE_DB_COLUMNS.has(column)) {
-      redactIndexes.set(index, ["material", "value_ciphertext"].includes(column) ? "json" : "text");
-    }
-  });
-
-  return { table, columns, redactIndexes };
-}
-
-function redactCopyRow(line: string, context: CopyContext): string {
-  const fields = line.split("\t");
-  for (const [index, kind] of context.redactIndexes) {
-    if (index >= fields.length || fields[index] === "\\N") continue;
-    fields[index] = kind === "json" ? JSON_REDACTION : "[REDACTED]";
-  }
-  return fields.map((field, index) =>
-    context.redactIndexes.has(index) ? field : redactText(field)
-  ).join("\t");
-}
-
-function splitSqlValues(input: string): string[] | null {
-  const values: string[] = [];
-  let start = 0;
-  let index = 0;
-  let dollarTag: string | null = null;
-  let singleQuoted = false;
-
-  while (index < input.length) {
-    if (dollarTag) {
-      if (input.startsWith(dollarTag, index)) {
-        index += dollarTag.length;
-        dollarTag = null;
-        continue;
-      }
-      index += 1;
-      continue;
-    }
-
-    const char = input[index]!;
-    if (singleQuoted) {
-      if (char === "'" && input[index + 1] === "'") {
-        index += 2;
-        continue;
-      }
-      if (char === "'") singleQuoted = false;
-      index += 1;
-      continue;
-    }
-
-    if (char === "'") {
-      singleQuoted = true;
-      index += 1;
-      continue;
-    }
-
-    if (char === "$") {
-      const rest = input.slice(index);
-      const match = rest.match(/^\$[A-Za-z0-9_]*\$/);
-      if (match) {
-        dollarTag = match[0];
-        index += dollarTag.length;
-        continue;
-      }
-    }
-
-    if (char === ",") {
-      values.push(input.slice(start, index).trim());
-      start = index + 1;
-    }
-    index += 1;
-  }
-
-  if (dollarTag || singleQuoted) return null;
-  values.push(input.slice(start).trim());
-  return values;
-}
-
-function redactInsertStatement(line: string): string {
-  const match = line.match(/^INSERT\s+INTO\s+(.+?)\s*\((.+)\)\s+VALUES\s*\((.*)\);$/i);
-  if (!match) return redactText(line);
-
-  const qualified = match[1]!.trim();
-  const table = unquoteIdentifier(qualified.split(".").at(-1)!);
-  const columns = match[2]!.split(",").map((column) => unquoteIdentifier(column));
-  const values = splitSqlValues(match[3]!);
-  if (!values || values.length !== columns.length) return redactText(line);
-
-  const tableColumns = SENSITIVE_DB_TABLE_COLUMNS.get(table);
-  columns.forEach((column, index) => {
-    if (values[index] === undefined || /^NULL$/i.test(values[index]!)) return;
-    const tableSensitive = tableColumns?.has(column) ?? false;
-    const genericSensitive = SENSITIVE_DB_COLUMNS.has(column);
-    if (!tableSensitive && !genericSensitive) {
-      values[index] = redactText(values[index]!);
-      return;
-    }
-
-    const json = ["material", "value_ciphertext", "config", "private_state"].includes(column);
-    values[index] = json
-      ? `'${JSON_REDACTION.replaceAll("'", "''")}'`
-      : "'[REDACTED]'";
-  });
-
-  return `INSERT INTO ${qualified} (${match[2]!}) VALUES (${values.join(", ")});`;
-}
-
-export async function sanitizeDatabaseBackup(inputPath: string, outputPath: string): Promise<void> {
-  const raw = createReadStream(inputPath);
-  const input = inputPath.endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
-  const reader = createInterface({ input, crlfDelay: Infinity });
-  const gzip = createGzip();
-  const output = createWriteStream(outputPath, { mode: 0o600 });
-  gzip.pipe(output);
-
-  let copyContext: CopyContext | null = null;
+async function copyIfExists(source: string, destination: string): Promise<boolean> {
   try {
-    for await (const line of reader) {
-      if (copyContext) {
-        if (line === "\\.") {
-          copyContext = null;
-          if (!gzip.write("\\.\n")) await once(gzip, "drain");
-          continue;
-        }
-        if (!gzip.write(`${redactCopyRow(line, copyContext)}\n`)) await once(gzip, "drain");
-        continue;
-      }
-
-      const nextContext = parseCopyHeader(line);
-      if (nextContext) {
-        copyContext = nextContext;
-        if (!gzip.write(`${redactText(line)}\n`)) await once(gzip, "drain");
-        continue;
-      }
-
-      const sanitized = /^INSERT\s+INTO\s+/i.test(line) ? redactInsertStatement(line) : redactText(line);
-      if (!gzip.write(`${sanitized}\n`)) await once(gzip, "drain");
-    }
-
-    gzip.end();
-    await once(output, "close");
-  } finally {
-    reader.close();
-    input.destroy();
-    raw.destroy();
-  }
-}
-
-async function looksText(path: string): Promise<boolean> {
-  if (TEXT_EXTENSIONS.has(extname(path).toLowerCase())) return true;
-  const buffer = await readFile(path);
-  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-  return !sample.includes(0);
-}
-
-async function copySanitizedTree(
-  source: string,
-  destination: string,
-  omitted: string[],
-  relative = "",
-): Promise<void> {
-  let entries;
-  try {
-    entries = await readdir(source, { withFileTypes: true });
+    await stat(source);
   } catch {
-    return;
+    return false;
   }
-
-  await mkdir(destination, { recursive: true, mode: 0o700 });
-
-  for (const entry of entries) {
-    const sourcePath = join(source, entry.name);
-    const destinationPath = join(destination, entry.name);
-    const relativePath = join(relative, entry.name);
-
-    if (entry.isSymbolicLink()) {
-      omitted.push(`${relativePath} (symlink; not followed)`);
-      continue;
-    }
-    if (entry.isDirectory()) {
-      await copySanitizedTree(sourcePath, destinationPath, omitted, relativePath);
-      continue;
-    }
-    if (!entry.isFile()) {
-      omitted.push(`${relativePath} (special file)`);
-      continue;
-    }
-
-    const info = await stat(sourcePath);
-    if (info.size > 128 * 1024 * 1024) {
-      omitted.push(`${relativePath} (file >128 MiB)`);
-      continue;
-    }
-    if (!(await looksText(sourcePath))) {
-      omitted.push(`${relativePath} (binary; cannot safely redact)`);
-      continue;
-    }
-
-    const value = await readFile(sourcePath, "utf8");
-    await writeFile(destinationPath, redactText(value), { mode: 0o600 });
-  }
+  await cp(source, destination, { recursive: true, force: true, preserveTimestamps: true });
+  return true;
 }
 
 async function storageManifest(storageRoot: string): Promise<Array<Record<string, unknown>>> {
@@ -450,6 +139,7 @@ async function storageManifest(storageRoot: string): Promise<Array<Record<string
     } catch {
       return;
     }
+
     for (const entry of entries) {
       const path = join(dir, entry.name);
       const relativePath = join(relative, entry.name);
@@ -459,7 +149,7 @@ async function storageManifest(storageRoot: string): Promise<Array<Record<string
         const info = await stat(path);
         rows.push({ path: relativePath, sizeBytes: info.size, modifiedAt: info.mtime.toISOString() });
       } else {
-        rows.push({ path: relativePath, type: "non-regular-file" });
+        rows.push({ path: relativePath, type: entry.isSymbolicLink() ? "symlink" : "non-regular-file" });
       }
     }
   }
@@ -469,17 +159,17 @@ async function storageManifest(storageRoot: string): Promise<Array<Record<string
 }
 
 async function createDatabaseExport(settings: ExportSettings, workDir: string): Promise<void> {
-  const rawDir = join(workDir, ".raw-db");
+  const stagingDir = join(workDir, ".db-staging");
   const outputDir = join(workDir, "database");
-  await mkdir(rawDir, { recursive: true, mode: 0o700 });
+  await mkdir(stagingDir, { recursive: true, mode: 0o700 });
   await mkdir(outputDir, { recursive: true, mode: 0o700 });
 
   const result = await runCommand(settings.paperclipCli, [
     "db:backup",
     "--config", settings.configPath,
-    "--dir", rawDir,
+    "--dir", stagingDir,
     "--retention-days", "1",
-    "--filename-prefix", "paperclip-debug-raw",
+    "--filename-prefix", "paperclip-debug",
     "--json",
   ], 10 * 60_000);
   await writeCommandResult(join(outputDir, "backup-command.json"), result);
@@ -487,15 +177,15 @@ async function createDatabaseExport(settings: ExportSettings, workDir: string): 
     throw new Error(`Paperclip database backup failed (exit ${result.code ?? "unknown"}): ${result.stderr || result.stdout}`);
   }
 
-  const backups = (await readdir(rawDir)).filter((name) => name.endsWith(".sql.gz")).sort();
-  const rawName = backups.at(-1);
-  if (!rawName) throw new Error("Paperclip database backup completed but no .sql.gz file was produced.");
+  const backups = (await readdir(stagingDir)).filter((name) => name.endsWith(".sql.gz")).sort();
+  const backupName = backups.at(-1);
+  if (!backupName) throw new Error("Paperclip database backup completed but no .sql.gz file was produced.");
 
-  await sanitizeDatabaseBackup(
-    join(rawDir, rawName),
-    join(outputDir, "paperclip-sanitized.sql.gz"),
+  await rename(
+    join(stagingDir, backupName),
+    join(outputDir, "paperclip.sql.gz"),
   );
-  await rm(rawDir, { recursive: true, force: true });
+  await rm(stagingDir, { recursive: true, force: true });
 }
 
 async function bestEffortDiagnostics(settings: ExportSettings, workDir: string): Promise<void> {
@@ -524,7 +214,7 @@ async function bestEffortDiagnostics(settings: ExportSettings, workDir: string):
     } catch (error) {
       await writeFile(
         join(diagnosticsDir, item.name),
-        JSON.stringify({ error: redactText(error instanceof Error ? error.message : String(error)) }, null, 2),
+        JSON.stringify({ error: error instanceof Error ? error.message : String(error) }, null, 2),
         { mode: 0o600 },
       );
     }
@@ -545,8 +235,8 @@ export async function createExportBundle(settings = resolveExportSettings()): Pr
   await chmod(settings.outputDir, 0o700).catch(() => {});
 
   const workDir = await mkdtemp(join(tmpdir(), "paperclip-support-"));
-  const omitted: string[] = [];
   const instanceRoot = dirname(settings.configPath);
+  const omitted: string[] = [];
 
   try {
     await createDatabaseExport(settings, workDir);
@@ -554,48 +244,32 @@ export async function createExportBundle(settings = resolveExportSettings()): Pr
     const paperclipDir = join(workDir, "paperclip");
     await mkdir(paperclipDir, { recursive: true, mode: 0o700 });
 
-    try {
-      const rawConfig = JSON.parse(await readFile(settings.configPath, "utf8")) as unknown;
-      await writeFile(
-        join(paperclipDir, "config.sanitized.json"),
-        JSON.stringify(sanitizeJson(rawConfig), null, 2),
-        { mode: 0o600 },
-      );
-    } catch (error) {
-      await writeFile(
-        join(paperclipDir, "config-error.txt"),
-        redactText(error instanceof Error ? error.message : String(error)),
-        { mode: 0o600 },
-      );
-    }
+    await copyIfExists(settings.configPath, join(paperclipDir, "config.json"));
+    await copyIfExists(join(instanceRoot, ".env"), join(paperclipDir, ".env"));
+    await copyIfExists(join(instanceRoot, "logs"), join(paperclipDir, "logs"));
+    await copyIfExists(join(instanceRoot, "data", "storage"), join(paperclipDir, "storage"));
 
+    await writeFile(
+      join(paperclipDir, "process-environment.json"),
+      JSON.stringify(process.env, null, 2),
+      { mode: 0o600 },
+    );
+
+    const masterKeyPath = join(instanceRoot, "secrets", "master.key");
     try {
-      const instanceEnv = await readFile(join(instanceRoot, ".env"), "utf8");
+      await stat(masterKeyPath);
+      omitted.push("secrets/master.key (explicitly excluded)");
+      const secretsDir = join(paperclipDir, "secrets");
+      await mkdir(secretsDir, { recursive: true, mode: 0o700 });
       await writeFile(
-        join(paperclipDir, "env.sanitized"),
-        redactText(instanceEnv),
+        join(secretsDir, "master.key.OMITTED.txt"),
+        "Paperclip secrets master key intentionally excluded from debug exports.\n",
         { mode: 0o600 },
       );
     } catch {
-      // Instance .env is optional.
+      // No local master key present.
     }
 
-    await writeFile(
-      join(paperclipDir, "process-environment.sanitized.json"),
-      JSON.stringify(sanitizeJson(process.env), null, 2),
-      { mode: 0o600 },
-    );
-
-    const secretsDir = join(paperclipDir, "secrets");
-    await mkdir(secretsDir, { recursive: true, mode: 0o700 });
-    await writeFile(
-      join(secretsDir, "master.key.REDACTED.txt"),
-      "[REDACTED: Paperclip secrets master key intentionally not exported]\n",
-      { mode: 0o600 },
-    );
-
-    await copySanitizedTree(join(instanceRoot, "logs"), join(paperclipDir, "logs"), omitted, "logs");
-    await copySanitizedTree(join(instanceRoot, "data", "storage"), join(paperclipDir, "storage"), omitted, "storage");
     await writeFile(
       join(paperclipDir, "storage-manifest.json"),
       JSON.stringify(await storageManifest(join(instanceRoot, "data", "storage")), null, 2),
@@ -605,33 +279,28 @@ export async function createExportBundle(settings = resolveExportSettings()): Pr
     await bestEffortDiagnostics(settings, workDir);
 
     const manifest = {
-      format: "paperclip-watcher-support-bundle-v1",
+      format: "paperclip-watcher-support-bundle-v2",
       generatedAt: new Date().toISOString(),
       host: { platform: platform(), release: release(), node: process.version },
       paperclip: { instanceId: settings.instanceId, configPath: settings.configPath },
-      sanitization: {
-        databaseRowsPreserved: true,
-        knownSecretColumnsRedacted: true,
-        configAndTextFilesRedacted: true,
-        environmentSecretValuesRedactedWhenKnown: true,
-        envFilesIncludedAsSanitizedCopies: true,
-        secretKeyRepresentedByRedactedPlaceholder: true,
-        binaryFilesIncluded: false,
+      contents: {
+        databaseBackup: "raw",
+        logs: "raw",
+        config: "raw",
+        instanceEnvironment: "raw when present",
+        processEnvironment: "raw",
+        storage: "raw including binary files",
       },
+      sanitization: "disabled",
       omitted,
-      notes: [
-        "The database dump preserves rows and schema but redacts known secret-bearing columns.",
-        "Text logs/config/storage files are retained with credential-pattern and environment-value redaction.",
-        "Environment files are included only as sanitized copies; the secrets master key is represented by a redacted placeholder.",
-        "Binary files are omitted because arbitrary binary data cannot be safely redacted.",
-        "Redaction is defense-in-depth and cannot prove that arbitrary user-authored prose never contains a credential.",
-      ],
+      warning:
+        "This bundle is intended for trusted local debugging and may contain credentials, tokens, private data, and other sensitive values.",
     };
     await writeFile(join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
 
     const fileName = `paperclip-support-${stamp()}.tar.gz`;
     const finalPath = join(settings.outputDir, fileName);
-    const tarResult = await runCommand("tar", ["-C", workDir, "-czf", finalPath, "."], 10 * 60_000);
+    const tarResult = await runCommand("tar", ["-C", workDir, "-I", "gzip -1", "-cf", finalPath, "."], 10 * 60_000);
     if (tarResult.code !== 0) throw new Error(`tar failed: ${tarResult.stderr || tarResult.stdout}`);
     await chmod(finalPath, 0o600);
 

@@ -42,7 +42,7 @@ function html(): string {
 </head>
 <body>
   <h1>Paperclip Support Exports</h1>
-  <p class="muted">Create a full debugging bundle with Paperclip database, logs, configuration, diagnostics and text storage. Known credentials are replaced with <code>[REDACTED]</code>.</p>
+  <p class="muted">Create a raw local debugging bundle with Paperclip database, logs, configuration, diagnostics and storage. Contents are not sanitized.</p>
 
   <div class="card">
     <button id="create">Create new export</button>
