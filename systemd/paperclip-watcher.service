@@ -13,6 +13,7 @@ Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
 PrivateTmp=true
+StateDirectory=paperclip-watcher
 ProtectSystem=full
 ProtectHome=read-only
 

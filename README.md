@@ -77,6 +77,55 @@ npm run check
 npm run dev
 ```
 
+## Support export and download UI
+
+The watcher can create a full Paperclip debugging bundle with the database, run logs, sanitized configuration, diagnostics, and text-based storage files.
+
+Create one from the shell:
+
+```bash
+npm run export
+```
+
+The generated archive is written to `.paperclip-exports/` when run manually. Under the systemd service it defaults to `/var/lib/paperclip-watcher/exports`.
+
+While the watcher is running, open:
+
+```text
+http://127.0.0.1:8787/
+```
+
+The HTML page can create new exports and download existing `.tar.gz` bundles. The HTTP interface is intentionally loopback-only. For a remote server, use an SSH tunnel instead of exposing the endpoint publicly:
+
+```bash
+ssh -L 8787:127.0.0.1:8787 your-server
+```
+
+### What is exported
+
+- a Paperclip SQL database backup;
+- Paperclip run/server logs;
+- sanitized Paperclip configuration;
+- watcher journal output and Paperclip diagnostics;
+- text-based files from Paperclip storage;
+- a storage manifest and export manifest.
+
+The exporter **preserves database rows** rather than dropping secret tables. Known secret-bearing columns (for example secret material, OAuth/session tokens, passwords, provider credentials, proposal ciphertext, and private transfer state) are replaced with `[REDACTED]` or a redacted JSON placeholder. Logs, config, and text storage are also scrubbed for known environment secret values and common credential formats.
+
+Binary storage files are listed in the manifest but omitted because arbitrary binary content cannot be reliably scrubbed without risking secret leakage. Environment files are included only as sanitized copies. The Paperclip secrets master key is represented by a placeholder file; the real key is never included.
+
+Redaction is defense-in-depth: arbitrary user-authored text can contain credentials in formats the scrubber cannot recognize. Review a bundle before sharing it outside a trusted debugging context.
+
+Optional settings:
+
+```dotenv
+PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED=true
+PAPERCLIP_WATCHER_EXPORT_HTTP_HOST=127.0.0.1
+PAPERCLIP_WATCHER_EXPORT_HTTP_PORT=8787
+PAPERCLIP_WATCHER_EXPORT_KEEP=5
+# PAPERCLIP_WATCHER_EXPORT_DIR=/path/to/exports
+```
+
 ## Install as a systemd service
 
 Run this as your normal Linux user, **not** with `sudo` in front. The installer invokes `sudo` only for operations that need root privileges:
