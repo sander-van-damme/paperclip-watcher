@@ -145,7 +145,7 @@ function isLoopbackHost(host: string): boolean {
 
 function httpPort(): number {
   const raw = process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_PORT?.trim();
-  if (!raw) return 8787;
+  if (!raw) return 18787;
   const port = Number.parseInt(raw, 10);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new Error("PAPERCLIP_WATCHER_EXPORT_HTTP_PORT must be between 1 and 65535");
