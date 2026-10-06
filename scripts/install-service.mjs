@@ -12,7 +12,7 @@ const serviceTemplatePath = join(projectDir, "systemd", "paperclip-watcher.servi
 
 function resolveExecutable(command) {
   try {
-    const resolved = execFileSync("/bin/sh", ["-c", "command -v -- \"$1\"", "sh", command], {
+    const resolved = execFileSync("/bin/sh", ["-c", "command -v \"$1\"", "sh", command], {
       encoding: "utf8",
       env: process.env,
       stdio: ["ignore", "pipe", "ignore"],
