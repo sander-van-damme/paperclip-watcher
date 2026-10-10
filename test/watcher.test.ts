@@ -100,3 +100,36 @@ test("paused CTO is not woken", async()=>{
   await r.watcher.pollOnce();
   assert.equal(r.wakes(),0);
 });
+
+test("outstanding diagnostics show actual blockers, not total assigned issues", async () => {
+  const r = rig();
+  r.setIssuesData([
+    { id: "parent", identifier: "LAB-221", title: "Campaign: direct heads", status: "blocked", assigneeAgentId: "cto" },
+    { id: "done", identifier: "LAB-223", status: "done", assigneeAgentId: "cto" },
+    { id: "cancel", identifier: "LAB-224", status: "cancelled", assigneeAgentId: "cto" },
+  ]);
+  const result = await r.watcher.pollOnce();
+  assert.equal(result.state, "outstanding_issues");
+  assert.equal(result.assignedCount, 3);
+  assert.equal(result.outstandingCount, 1);
+  assert.deepEqual(result.outstandingIssues, [
+    { id: "parent", identifier: "LAB-221", title: "Campaign: direct heads", status: "blocked" },
+  ]);
+  assert.equal(result.omittedOutstandingCount, 0);
+  assert.equal(r.wakes(), 0);
+});
+
+test("diagnostics cap the list but retain the full outstanding count", async () => {
+  const r = rig();
+  r.setIssuesData(Array.from({length: 35}, (_, index) => ({
+    id: "issue-" + index,
+    identifier: "LAB-" + index,
+    status: "todo",
+    assigneeAgentId: "cto",
+  })));
+  const result = await r.watcher.pollOnce();
+  assert.equal(result.assignedCount, 35);
+  assert.equal(result.outstandingCount, 35);
+  assert.equal(result.outstandingIssues?.length, 30);
+  assert.equal(result.omittedOutstandingCount, 5);
+});
