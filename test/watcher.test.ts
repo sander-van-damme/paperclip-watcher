@@ -135,3 +135,12 @@ test("diagnostics cap the list but retain the full outstanding count", async () 
   assert.equal(result.outstandingIssues?.length, 30);
   assert.equal(result.omittedOutstandingCount, 5);
 });
+
+test("a running CTO is busy, not unavailable, and must not receive another wake", async () => {
+  const r=rig("succeeded","running");
+  assert.equal((await r.watcher.pollOnce()).state,"agent_running");
+  r.setIssues("done");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"agent_running");
+  assert.equal(r.wakes(),0);
+});
