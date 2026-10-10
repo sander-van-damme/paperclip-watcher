@@ -146,7 +146,7 @@ export async function startExportHttpServer(): Promise<Server> {
 
   const host = process.env.PAPERCLIP_WATCHER_EXPORT_BIND_HOST?.trim() || "127.0.0.1";
   const password = process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD;
-  if (!password || password.length < 12) throw new Error("Export password of at least 12 characters required");
+  if (!password) throw new Error("PAPERCLIP_WATCHER_EXPORT_PASSWORD is required");
   const port = 18787;
   const settings = resolveExportSettings();
   const state: ExportState = {
