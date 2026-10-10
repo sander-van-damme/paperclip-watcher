@@ -30,7 +30,7 @@ The systemd installer creates `/etc/paperclip-watcher.env`, installs a service a
 
 ## Debugging exports
 
-The exporter remains available via `npm run export` or the browser interface on port 18787. The interface uses **HTTP Basic authentication**: enter any username and the password from `PAPERCLIP_WATCHER_EXPORT_PASSWORD` (12+ characters). It binds to **127.0.0.1** by default. Access remotely with `ssh -L 18787:127.0.0.1:18787 USER@SERVER`, then browse to `http://127.0.0.1:18787/`. Do not expose this Basic-auth interface over unencrypted HTTP on a LAN. To disable the browser interface, set `PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED=false`.
+The exporter remains available via `npm run export` or the browser interface on port 18787. The interface uses **HTTP Basic authentication**: enter any username and the password from `PAPERCLIP_WATCHER_EXPORT_PASSWORD` (non-empty; a strong password is recommended). It binds to **127.0.0.1** by default. Access remotely with `ssh -L 18787:127.0.0.1:18787 USER@SERVER`, then browse to `http://127.0.0.1:18787/`. Do not expose this Basic-auth interface over unencrypted HTTP on a LAN. To disable the browser interface, set `PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED=false`.
 
 The exporter includes database backups, raw logs/configuration, storage and diagnostics. Exports may contain **secrets and private data**; only the Paperclip master key is deliberately omitted. The process-environment snapshot masks common secret-like names; this is **not full sanitization**.
 
