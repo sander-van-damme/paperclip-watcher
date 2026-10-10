@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { PaperclipWatcher } from "../src/watcher.js";
 import { PaperclipClient } from "../src/paperclip-client.js";
-import type { IssueSummary, WatcherConfig, WatcherState } from "../src/types.js";
+import type { IssueSummary, IssueInteractionSummary, WatcherConfig, WatcherState } from "../src/types.js";
 
 const config: WatcherConfig = {
   apiUrl: "http://paperclip.test", apiKey: "secret", ctoAgentId: "cto",
@@ -16,11 +16,16 @@ const config: WatcherConfig = {
 function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: WatcherState) {
   let issues: IssueSummary[] = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
   let now = 0, wakes = 0;
+  let interactions: IssueInteractionSummary[] = [];
   let saved: WatcherState = initialState ? {...initialState} : {lastHandledSignature: null, lastWakeAt: null};
   const fetcher: typeof fetch = async (url, opts) => {
     const path = String(url);
     if (path.endsWith("/api/agents/cto")) return Response.json({id:"cto",companyId:"company",status:agentStatus});
     if (path.includes("/issues?")) return Response.json(issues);
+    if (path.endsWith("/api/issues/task/interactions")) return Response.json(interactions);
+    if (path.endsWith("/api/issues/task")) return Response.json({
+      ...issues[0], companyId:"company",
+    });
     if (path.includes("/heartbeat-runs?")) return Response.json([{id:"run",agentId:"cto",status:runStatus,livenessState:"completed"}]);
     if (path.endsWith("/wakeup") && opts?.method === "POST") {wakes++; return Response.json({id:"wake",status:"queued"});}
     throw new Error("Unexpected path " + path);
@@ -33,6 +38,7 @@ function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: Watch
   return {
     watcher, setIssues: (status: string) => {issues = [{id:"task",status,assigneeAgentId:"cto"}];},
     setIssuesData: (value: IssueSummary[]) => { issues = value; },
+    setInteractions: (value: IssueInteractionSummary[]) => { interactions = value; },
     advance: (ms: number) => {now += ms;}, wakes: () => wakes,
   };
 }
@@ -58,7 +64,7 @@ test("no wake for queued, running, scheduled_retry, failed or timed_out runs", a
   }
 });
 test("nonterminal issues prevent wake", async () => {
-  for (const status of ["backlog","todo","in_progress","in_review","blocked","unexpected"]) {
+  for (const status of ["todo","in_progress","in_review","blocked","unexpected"]) {
     const r=rig();
     r.setIssues(status);
     await r.watcher.pollOnce();
@@ -134,4 +140,136 @@ test("diagnostics cap the list but retain the full outstanding count", async () 
   assert.equal(result.outstandingCount, 35);
   assert.equal(result.outstandingIssues?.length, 30);
   assert.equal(result.omittedOutstandingCount, 5);
+});
+
+test("a running CTO is busy, not unavailable, and must not receive another wake", async () => {
+  const r=rig("succeeded","running");
+  assert.equal((await r.watcher.pollOnce()).state,"agent_running");
+  r.setIssues("done");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"agent_running");
+  assert.equal(r.wakes(),0);
+});
+
+test("backlog is parked and permits bounded recurring CTO heartbeats", async () => {
+  const r=rig();
+  r.setIssues("backlog");
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  let result=await r.watcher.pollOnce();
+  assert.equal(result.state,"woken");
+  assert.equal(result.parkedBacklogCount,1);
+  assert.equal(result.outstandingCount,0);
+  assert.equal(r.wakes(),1);
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"cooldown");
+  assert.equal(r.wakes(),1);
+  r.advance(180000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal(r.wakes(),2);
+});
+
+test("a backlog does not bypass actual actionable CTO work", async () => {
+  const r=rig();
+  r.setIssuesData([
+    {id:"task",status:"backlog",assigneeAgentId:"cto"},
+    {id:"todo",status:"todo",assigneeAgentId:"cto"},
+  ]);
+  const state=await r.watcher.pollOnce();
+  assert.equal(state.state,"outstanding_issues");
+  assert.equal(state.outstandingCount,1);
+  assert.equal(state.parkedBacklogCount,1);
+  assert.equal(r.wakes(),0);
+});
+
+test("human-reviewer review path allows CTO to proceed", async () => {
+  const r=rig();
+  r.setIssuesData([{
+    id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+    reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"board-user"}]},
+  }]);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  const result=await r.watcher.pollOnce();
+  assert.equal(result.state,"woken");
+  assert.equal(result.humanReviewCount,1);
+  assert.equal(r.wakes(),1);
+});
+
+test("human execution participant is verified using authoritative issue detail", async () => {
+  const r=rig();
+  r.setIssuesData([{
+    id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+    executionState:{status:"pending",currentParticipant:{type:"user",userId:"reviewer"}},
+    reviewAttention:{state:"covered",paths:[{kind:"execution_participant",ref:"reviewer"}]},
+  }]);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+});
+
+test("human-only interactions and formal approvals are human review paths", async () => {
+  const r=rig();
+  r.setIssuesData([{
+    id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+    reviewAttention:{state:"covered",paths:[
+      {kind:"interaction",ref:"interaction-1"},
+      {kind:"approval",ref:"approval-1"},
+    ]},
+  }]);
+  r.setInteractions([{
+    id:"interaction-1",status:"pending",
+    effectiveResolverPolicy:"human_only",addresseeAgentId:null,
+  }]);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+});
+
+test("agent review and unknown review paths still block", async () => {
+  const variants: IssueSummary[] = [
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"execution_participant",ref:"agent-reviewer"}]},
+      executionState:{status:"pending",currentParticipant:{type:"agent",agentId:"agent-reviewer"}}},
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"stalled",paths:[]}},
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"board-user"},{kind:"queued_wake",ref:"queued-run"}]}},
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"interaction",ref:"agent-interaction"}]}},
+  ];
+  for (const variant of variants) {
+    const r=rig();
+    r.setIssuesData([variant]);
+    r.setInteractions([{id:"agent-interaction",status:"pending",effectiveResolverPolicy:"anyone",
+      addresseeAgentId:"other-agent"}]);
+    assert.equal((await r.watcher.pollOnce()).state,"outstanding_issues");
+    r.advance(60000);
+    assert.equal(r.wakes(),0);
+  }
+});
+
+test("backlog never bypasses pending retries or rate-limit failures", async () => {
+  for (const status of ["queued","running","scheduled_retry","failed","timed_out"]) {
+    const r=rig(status);
+    r.setIssues("backlog");
+    r.advance(60000);
+    const result=await r.watcher.pollOnce();
+    assert.notEqual(result.state,"woken",status);
+    assert.equal(r.wakes(),0,status);
+  }
+});
+
+test("parked eligibility invalidates the old blocked baseline on upgrade", async () => {
+  const legacy = createHash("sha256").update(JSON.stringify([
+    ["task","backlog",null,null],
+  ])).digest("hex");
+  const r=rig("succeeded","idle",{lastHandledSignature:legacy,lastWakeAt:1});
+  r.setIssues("backlog");
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(300002);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal(r.wakes(),1);
 });

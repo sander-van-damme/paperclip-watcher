@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { log } from "./logger.js";
 import { PaperclipClient } from "./paperclip-client.js";
+import { isWaitingOnHumanReview } from "./review-wait.js";
 import type { IssueSummary, WatcherConfig, WatcherState } from "./types.js";
 import type { StateStore } from "./state.js";
 
 const TERMINAL = new Set(["done", "cancelled"]);
-const WORK = new Set(["backlog", "todo", "in_progress", "in_review", "blocked"]);
+const WORK = new Set(["todo", "in_progress", "in_review", "blocked"]);
+const KNOWN_STATUSES = new Set(["done", "cancelled", "backlog", ...WORK]);
 const ACTIVE_RUNS = new Set(["queued", "running", "scheduled_retry"]);
 const FAILURE_RUNS = new Set(["failed", "interrupted", "timed_out", "cancelled"]);
 const MAX_BLOCKERS_IN_LOG = 30;
@@ -23,12 +25,24 @@ export interface WatcherPollResult {
   outstandingCount: number;
   outstandingIssues?: OutstandingIssueDetail[];
   omittedOutstandingCount?: number;
+  parkedBacklogCount?: number;
+  humanReviewCount?: number;
 }
 
-function signature(issues: IssueSummary[]): string {
-  return createHash("sha256").update(JSON.stringify(issues.map(issue => [
+function signature(issues: IssueSummary[], backlogIds: string[] = [], humanReviewIds: string[] = []): string {
+  const snapshot = issues.map(issue => [
     issue.id, issue.status, issue.completedAt ?? null, issue.cancelledAt ?? null,
-  ]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))).digest("hex");
+  ]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+  // Keep the original signature for ordinary all-terminal work and
+  // nonterminal blockers, preserving existing persisted idempotency.
+  // Distinguish *eligible* parked work from the same status snapshot when
+  // it used to block a wake, including on upgrades.
+  const parked = backlogIds.length > 0 || humanReviewIds.length > 0;
+  const value = parked
+    ? {policy: "passive-wait-v1", snapshot, backlogIds: [...backlogIds].sort(),
+       humanReviewIds: [...humanReviewIds].sort()}
+    : snapshot;
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 export class PaperclipWatcher {
@@ -55,24 +69,51 @@ export class PaperclipWatcher {
     const companyId = await this.company();
     const agent = await this.client.getAgent(this.config.ctoAgentId);
     if (agent.companyId !== companyId) throw new Error("CTO company mismatch");
+    // CTO already running: no extra wake is appropriate, but this is not
+    // an error. Task-watchdog coverage can still be configured in parallel.
+    if (agent.status === "running") return this.reset("agent_running");
     if (!["active", "idle"].includes(agent.status)) return this.reset("agent_unavailable");
     const issues = await this.client.listAssignedIssues(companyId, this.config.ctoAgentId);
-    const unknownIssues = issues.filter(issue => !TERMINAL.has(issue.status) && !WORK.has(issue.status));
+    const unknownIssues = issues.filter(issue => !KNOWN_STATUSES.has(issue.status));
     if (unknownIssues.length > 0) {
       return this.blockedResult("unknown_issue_status", issues, unknownIssues);
     }
-    const outstandingIssues = issues.filter(issue => WORK.has(issue.status));
+    if (issues.length === 0) return this.reset("no_assigned_issues");
+
+    const humanReviews = new Set<string>();
+    for (const issue of issues) {
+      if (issue.status === "in_review" && await isWaitingOnHumanReview(issue, this.client)) {
+        humanReviews.add(issue.id);
+      }
+    }
+    const backlogIds = issues.filter(issue => issue.status === "backlog").map(issue => issue.id);
+    const humanReviewIds = [...humanReviews];
+
+    const outstandingIssues = issues.filter(issue =>
+      WORK.has(issue.status) && !humanReviews.has(issue.id),
+    );
     if (outstandingIssues.length > 0) {
-      // Track the nonterminal state so the subsequent terminal transition triggers a wake.
+      // Preserve the ordinary blocker signature; when the last blocker
+      // becomes parked/human-owned, the eligible signature differs.
       if (this.state === null) this.state = await this.stateStore.load();
       const current = signature(issues);
       if (this.state.lastHandledSignature !== current) {
         this.state.lastHandledSignature = current;
         await this.stateStore.save(this.state);
       }
-      return this.blockedResult("outstanding_issues", issues, outstandingIssues);
+      return {
+        ...this.blockedResult("outstanding_issues", issues, outstandingIssues),
+        parkedBacklogCount: backlogIds.length,
+        humanReviewCount: humanReviewIds.length,
+      };
     }
-    if (issues.length === 0) return this.reset("no_assigned_issues");
+    const passive = backlogIds.length > 0 || humanReviewIds.length > 0;
+    const report = {
+      assignedCount: issues.length,
+      outstandingCount: 0,
+      parkedBacklogCount: backlogIds.length,
+      humanReviewCount: humanReviewIds.length,
+    };
     const runs = await this.client.listAgentRuns(companyId, this.config.ctoAgentId);
     if (runs.some(run => ACTIVE_RUNS.has(run.status))) return this.reset("active_or_retrying_run", issues.length);
     if (runs.some(run => !ACTIVE_RUNS.has(run.status) && !["succeeded", ...FAILURE_RUNS].includes(run.status))) {
@@ -83,24 +124,24 @@ export class PaperclipWatcher {
       return this.reset("last_run_not_successful", issues.length);
     }
 
-    const sig = signature(issues);
+    const sig = signature(issues, backlogIds, humanReviewIds);
     if (this.state === null) this.state = await this.stateStore.load();
-    // An existing terminal snapshot is eligible on first installation too.
-    // Older versions mistakenly saved that snapshot as handled without
-    // invoking a wake. lastWakeAt=null distinguishes that legacy baseline
-    // from a snapshot for which a wake was actually requested.
-    if (this.state.lastHandledSignature === sig && this.state.lastWakeAt !== null) {
-      return this.reset("already_handled", issues.length);
+    // Finished work is woken once per snapshot. Parked backlog and reviews
+    // waiting on humans may be re-woken after cooldown because no agent
+    // work is currently actionable. This keeps research moving while a
+    // human decision is outstanding, without 15-second wakeup storms.
+    if (!passive && this.state.lastHandledSignature === sig && this.state.lastWakeAt !== null) {
+      return { state: "already_handled", ...report };
     }
     if (this.lastObservedSignature !== sig) {
       this.lastObservedSignature = sig;
       this.emptySince = this.now();
-      return { state: "settling", assignedCount: issues.length, outstandingCount: 0 };
+      return { state: "settling", ...report };
     }
     if (this.emptySince === null) this.emptySince = this.now();
-    if (this.now() - this.emptySince < this.config.idleGraceMs) return { state: "settling", assignedCount: issues.length, outstandingCount: 0 };
+    if (this.now() - this.emptySince < this.config.idleGraceMs) return { state: "settling", ...report };
     if (this.state.lastWakeAt !== null && this.now() - this.state.lastWakeAt < this.config.cooldownMs) {
-      return { state: "cooldown", assignedCount: issues.length, outstandingCount: 0 };
+      return { state: "cooldown", ...report };
     }
 
     // Persist *before* invoking. An uncertain network response must not
@@ -109,11 +150,15 @@ export class PaperclipWatcher {
     this.state.lastWakeAt = this.now();
     if (!this.config.dryRun) {
       await this.stateStore.save(this.state);
-      const result = await this.client.wakeCto(this.config.ctoAgentId, "paperclip-watcher:idle:" + sig);
+      // A parked snapshot can legitimately get multiple wakes over time.
+      // Give each bounded attempt its own idempotency key; the persisted
+      // lastWakeAt suppresses duplicate attempts on uncertain responses.
+      const wakeKey = "paperclip-watcher:idle:" + sig + (passive ? ":" + this.state.lastWakeAt : "");
+      const result = await this.client.wakeCto(this.config.ctoAgentId, wakeKey);
       log("info", "CTO wake requested", { resultStatus: result.status });
     }
     this.emptySince = null;
-    return { state: this.config.dryRun ? "dry_run" : "woken", assignedCount: issues.length, outstandingCount: 0 };
+    return { state: this.config.dryRun ? "dry_run" : "woken", ...report };
   }
 
   private reset(state: string, assignedCount = 0): WatcherPollResult {

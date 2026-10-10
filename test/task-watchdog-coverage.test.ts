@@ -36,6 +36,7 @@ function rig(input: {
   explicitCeo?: boolean;
   maxAttachments?: number;
   ceoStatus?: string;
+  ctoStatus?: string;
   agentRoles?: [string, string];
   knownIds?: string[];
   ceoCount?: number;
@@ -56,14 +57,14 @@ function rig(input: {
     const u = new URL(String(url));
     const method = options?.method ?? "GET";
     if (u.pathname === "/api/agents/cto") {
-      return Response.json({ id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: "idle" });
+      return Response.json({ id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: input.ctoStatus ?? "idle" });
     }
     if (u.pathname === "/api/agents/ceo") {
       return Response.json({ id: "ceo", companyId: "company", role: input.agentRoles?.[1] ?? "ceo", status: input.ceoStatus ?? "idle" });
     }
     if (u.pathname === "/api/companies/company/agents") {
       return Response.json([
-        { id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: "idle" },
+        { id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: input.ctoStatus ?? "idle" },
         ...Array.from({length: input.ceoCount ?? 1}, (_, index) => ({
           id: index ? "ceo-" + index : "ceo",
           companyId: "company",
@@ -200,5 +201,24 @@ test("dry run and pre-existing tracking prevent any PUT", async () => {
 test("invalid or cyclic parent topology fails closed", async () => {
   const x=rig({issues:[issue("a","blocked","b"), issue("b","todo","a","engineer")]});
   await assert.rejects(x.newSupervisor().pollOnce());
+  assert.equal(x.puts.length,0);
+});
+
+test("attaches watchdog while CTO is actively running", async () => {
+  const x = rig({issues:[issue("live-cto-campaign","in_progress")],ctoStatus:"running"});
+  const result = await x.newSupervisor().pollOnce();
+  assert.equal(result.attached,1);
+  assert.equal(x.puts[0]?.issueId,"live-cto-campaign");
+});
+
+test("attaches watchdog while CEO is running other work", async () => {
+  const x = rig({issues:[issue("live-cto-campaign","in_progress")],ceoStatus:"running"});
+  const result = await x.newSupervisor().pollOnce();
+  assert.equal(result.attached,1);
+});
+
+test("does not configure a watchdog for paused CTO", async () => {
+  const x = rig({issues:[issue("paused","todo")],ctoStatus:"paused"});
+  await assert.rejects(x.newSupervisor().pollOnce(),/not invokable/);
   assert.equal(x.puts.length,0);
 });

@@ -1,4 +1,4 @@
-import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, TaskWatchdogSummary, WatcherConfig } from "./types.js";
+import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, TaskWatchdogSummary, IssueInteractionSummary, WatcherConfig } from "./types.js";
 export type FetchLike = typeof fetch;
 export class HttpError extends Error {
   constructor(message: string, readonly status: number, readonly body: string) {
@@ -32,6 +32,16 @@ export class PaperclipClient {
 
   getIssue(issueId: string): Promise<IssueSummary> {
     return this.request<IssueSummary>("/api/issues/"+encodeURIComponent(issueId));
+  }
+
+  async listIssueInteractions(issueId: string): Promise<IssueInteractionSummary[]> {
+    const interactions = await this.request<IssueInteractionSummary[]>(
+      "/api/issues/" + encodeURIComponent(issueId) + "/interactions",
+    );
+    if (!Array.isArray(interactions) || interactions.some(item =>
+      !item || typeof item.id !== "string" || typeof item.status !== "string"
+    )) throw new Error("Invalid Paperclip issue interactions response");
+    return interactions;
   }
 
   async getTaskWatchdog(issueId: string): Promise<TaskWatchdogSummary | null> {
