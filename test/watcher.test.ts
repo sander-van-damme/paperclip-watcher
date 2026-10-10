@@ -150,3 +150,124 @@ test("a running CTO is busy, not unavailable, and must not receive another wake"
   assert.equal((await r.watcher.pollOnce()).state,"agent_running");
   assert.equal(r.wakes(),0);
 });
+
+test("backlog is parked and permits bounded recurring CTO heartbeats", async () => {
+  const r=rig();
+  r.setIssues("backlog");
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  let result=await r.watcher.pollOnce();
+  assert.equal(result.state,"woken");
+  assert.equal(result.parkedBacklogCount,1);
+  assert.equal(result.outstandingCount,0);
+  assert.equal(r.wakes(),1);
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"cooldown");
+  assert.equal(r.wakes(),1);
+  r.advance(240000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal(r.wakes(),2);
+});
+
+test("a backlog does not bypass actual actionable CTO work", async () => {
+  const r=rig();
+  r.setIssuesData([
+    {id:"task",status:"backlog",assigneeAgentId:"cto"},
+    {id:"todo",status:"todo",assigneeAgentId:"cto"},
+  ]);
+  const state=await r.watcher.pollOnce();
+  assert.equal(state.state,"outstanding_issues");
+  assert.equal(state.outstandingCount,1);
+  assert.equal(state.parkedBacklogCount,1);
+  assert.equal(r.wakes(),0);
+});
+
+test("human-reviewer review path allows CTO to proceed", async () => {
+  const r=rig();
+  r.setIssuesData([{
+    id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+    reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"board-user"}]},
+  }]);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  const result=await r.watcher.pollOnce();
+  assert.equal(result.state,"woken");
+  assert.equal(result.humanReviewCount,1);
+  assert.equal(r.wakes(),1);
+});
+
+test("human execution participant is verified using authoritative issue detail", async () => {
+  const r=rig();
+  r.setIssuesData([{
+    id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+    executionState:{status:"pending",currentParticipant:{type:"user",userId:"reviewer"}},
+    reviewAttention:{state:"covered",paths:[{kind:"execution_participant",ref:"reviewer"}]},
+  }]);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+});
+
+test("human-only interactions and formal approvals are human review paths", async () => {
+  const r=rig();
+  r.setIssuesData([{
+    id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+    reviewAttention:{state:"covered",paths:[
+      {kind:"interaction",ref:"interaction-1"},
+      {kind:"approval",ref:"approval-1"},
+    ]},
+  }]);
+  r.setInteractions([{
+    id:"interaction-1",status:"pending",
+    effectiveResolverPolicy:"human_only",addresseeAgentId:null,
+  }]);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+});
+
+test("agent review and unknown review paths still block", async () => {
+  const variants: IssueSummary[] = [
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"execution_participant",ref:"agent-reviewer"}]},
+      executionState:{status:"pending",currentParticipant:{type:"agent",agentId:"agent-reviewer"}}},
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"stalled",paths:[]}},
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"board-user"},{kind:"queued_wake",ref:"queued-run"}]}},
+    {id:"task",status:"in_review",companyId:"company",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"interaction",ref:"agent-interaction"}]}},
+  ];
+  for (const variant of variants) {
+    const r=rig();
+    r.setIssuesData([variant]);
+    r.setInteractions([{id:"agent-interaction",status:"pending",effectiveResolverPolicy:"anyone",
+      addresseeAgentId:"other-agent"}]);
+    assert.equal((await r.watcher.pollOnce()).state,"outstanding_issues");
+    r.advance(60000);
+    assert.equal(r.wakes(),0);
+  }
+});
+
+test("backlog never bypasses pending retries or rate-limit failures", async () => {
+  for (const status of ["queued","running","scheduled_retry","failed","timed_out"]) {
+    const r=rig(status);
+    r.setIssues("backlog");
+    r.advance(60000);
+    const result=await r.watcher.pollOnce();
+    assert.notEqual(result.state,"woken",status);
+    assert.equal(r.wakes(),0,status);
+  }
+});
+
+test("parked eligibility invalidates the old blocked baseline on upgrade", async () => {
+  const legacy = createHash("sha256").update(JSON.stringify([
+    ["task","backlog",null,null],
+  ])).digest("hex");
+  const r=rig("succeeded","idle",{lastHandledSignature:legacy,lastWakeAt:1});
+  r.setIssues("backlog");
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(300002);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal(r.wakes(),1);
+});
