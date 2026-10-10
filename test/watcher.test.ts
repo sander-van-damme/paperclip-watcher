@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { PaperclipWatcher } from "../src/watcher.js";
 import { PaperclipClient } from "../src/paperclip-client.js";
@@ -10,10 +11,10 @@ const config: WatcherConfig = {
   pageSize: 500, idleGraceMs: 60000, cooldownMs: 300000,
   stateDir: "/tmp/test", dryRun: false,
 };
-function rig(runStatus = "succeeded", agentStatus = "idle") {
+function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: WatcherState) {
   let issues = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
   let now = 0, wakes = 0;
-  let saved: WatcherState = {lastHandledSignature: null, lastWakeAt: null};
+  let saved: WatcherState = initialState ? {...initialState} : {lastHandledSignature: null, lastWakeAt: null};
   const fetcher: typeof fetch = async (url, opts) => {
     const path = String(url);
     if (path.endsWith("/api/agents/cto")) return Response.json({id:"cto",companyId:"company",status:agentStatus});
@@ -63,11 +64,31 @@ test("nonterminal issues prevent wake", async () => {
     assert.equal(r.wakes(),0,status);
   }
 });
-test("first startup with only terminal tasks initializes baseline",async()=>{
+test("first startup with only closed tasks wakes once after grace",async()=>{
   const r=rig();
   r.setIssues("cancelled");
-  assert.equal((await r.watcher.pollOnce()).state,"baseline_initialized");
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
   r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal((await r.watcher.pollOnce()).state,"already_handled");
+  assert.equal(r.wakes(),1);
+});
+test("migrates a previously handled bootstrap baseline without a wake",async()=>{
+  const signature = createHash("sha256").update(JSON.stringify([["task","done",null,null]])).digest("hex");
+  const r=rig("succeeded","idle",{lastHandledSignature:signature,lastWakeAt:null});
+  r.setIssues("done");
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal(r.wakes(),1);
+});
+test("does not repeat a wake for a previously handled terminal snapshot",async()=>{
+  const signature = createHash("sha256").update(JSON.stringify([["task","done",null,null]])).digest("hex");
+  const r=rig("succeeded","idle",{lastHandledSignature:signature,lastWakeAt:1});
+  r.setIssues("done");
+  assert.equal((await r.watcher.pollOnce()).state,"already_handled");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"already_handled");
   assert.equal(r.wakes(),0);
 });
 test("paused CTO is not woken", async()=>{
