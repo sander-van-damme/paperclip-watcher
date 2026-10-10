@@ -44,7 +44,16 @@ export class PaperclipWatcher {
     if (issues.some(issue => !TERMINAL.has(issue.status) && !WORK.has(issue.status))) {
       return this.reset("unknown_issue_status");
     }
-    if (issues.some(issue => WORK.has(issue.status))) return this.reset("outstanding_issues");
+    if (issues.some(issue => WORK.has(issue.status))) {
+      // Track the nonterminal state so the subsequent terminal transition triggers a wake.
+      if (this.state === null) this.state = await this.stateStore.load();
+      const current = signature(issues);
+      if (this.state.lastHandledSignature !== current) {
+        this.state.lastHandledSignature = current;
+        await this.stateStore.save(this.state);
+      }
+      return this.reset("outstanding_issues");
+    }
     if (issues.length === 0) return this.reset("no_assigned_issues");
     const runs = await this.client.listAgentRuns(companyId, this.config.ctoAgentId);
     if (runs.some(run => ACTIVE_RUNS.has(run.status))) return this.reset("active_or_retrying_run");
