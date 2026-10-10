@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { PaperclipWatcher } from "../src/watcher.js";
 import { PaperclipClient } from "../src/paperclip-client.js";
-import type { WatcherConfig, WatcherState } from "../src/types.js";
+import type { IssueSummary, WatcherConfig, WatcherState } from "../src/types.js";
 
 const config: WatcherConfig = {
   apiUrl: "http://paperclip.test", apiKey: "secret", ctoAgentId: "cto",
@@ -12,7 +12,7 @@ const config: WatcherConfig = {
   stateDir: "/tmp/test", dryRun: false,
 };
 function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: WatcherState) {
-  let issues = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
+  let issues: IssueSummary[] = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
   let now = 0, wakes = 0;
   let saved: WatcherState = initialState ? {...initialState} : {lastHandledSignature: null, lastWakeAt: null};
   const fetcher: typeof fetch = async (url, opts) => {
@@ -30,6 +30,7 @@ function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: Watch
   const watcher = new PaperclipWatcher(config, new PaperclipClient(config, fetcher), store, () => now);
   return {
     watcher, setIssues: (status: string) => {issues = [{id:"task",status,assigneeAgentId:"cto"}];},
+    setIssuesData: (value: IssueSummary[]) => { issues = value; },
     advance: (ms: number) => {now += ms;}, wakes: () => wakes,
   };
 }
