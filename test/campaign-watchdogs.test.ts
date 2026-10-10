@@ -198,7 +198,7 @@ test("dry run and pre-existing tracking prevent any PUT", async () => {
   assert.deepEqual(y.puts,[]);
 });
 test("invalid or cyclic parent topology fails closed", async () => {
-  const x=rig({issues:[issue("a","blocked","b"), issue("b","todo","a")]});
+  const x=rig({issues:[issue("a","blocked","b"), issue("b","todo","a","engineer")]});
   await assert.rejects(x.newSupervisor().pollOnce());
   assert.equal(x.puts.length,0);
 });
