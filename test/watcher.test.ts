@@ -162,9 +162,11 @@ test("backlog is parked and permits bounded recurring CTO heartbeats", async () 
   assert.equal(result.outstandingCount,0);
   assert.equal(r.wakes(),1);
   r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
   assert.equal((await r.watcher.pollOnce()).state,"cooldown");
   assert.equal(r.wakes(),1);
-  r.advance(240000);
+  r.advance(180000);
   assert.equal((await r.watcher.pollOnce()).state,"woken");
   assert.equal(r.wakes(),2);
 });
