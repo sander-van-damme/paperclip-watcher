@@ -36,6 +36,7 @@ function rig(input: {
   explicitCeo?: boolean;
   maxAttachments?: number;
   ceoStatus?: string;
+  ctoStatus?: string;
   agentRoles?: [string, string];
   knownIds?: string[];
   ceoCount?: number;
@@ -56,14 +57,14 @@ function rig(input: {
     const u = new URL(String(url));
     const method = options?.method ?? "GET";
     if (u.pathname === "/api/agents/cto") {
-      return Response.json({ id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: "idle" });
+      return Response.json({ id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: input.ctoStatus ?? "idle" });
     }
     if (u.pathname === "/api/agents/ceo") {
       return Response.json({ id: "ceo", companyId: "company", role: input.agentRoles?.[1] ?? "ceo", status: input.ceoStatus ?? "idle" });
     }
     if (u.pathname === "/api/companies/company/agents") {
       return Response.json([
-        { id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: "idle" },
+        { id: "cto", companyId: "company", role: input.agentRoles?.[0] ?? "cto", status: input.ctoStatus ?? "idle" },
         ...Array.from({length: input.ceoCount ?? 1}, (_, index) => ({
           id: index ? "ceo-" + index : "ceo",
           companyId: "company",
