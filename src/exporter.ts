@@ -251,7 +251,7 @@ export async function createExportBundle(settings = resolveExportSettings()): Pr
 
     await writeFile(
       join(paperclipDir, "process-environment.json"),
-      JSON.stringify(process.env, null, 2),
+      JSON.stringify(Object.fromEntries(Object.entries(process.env).map(([key, value]) => [key, /PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL/i.test(key) ? "[REDACTED]" : value])), null, 2),
       { mode: 0o600 },
     );
 
