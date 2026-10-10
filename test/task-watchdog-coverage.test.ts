@@ -11,7 +11,7 @@ const config: WatcherConfig = {
   pollIntervalMs: 15000, requestTimeoutMs: 10000, pageSize: 500,
   idleGraceMs: 60000, cooldownMs: 300000,
   stateDir: "/tmp/test-campaign", dryRun: false,
-  taskWatchdogEnabled: true, taskWatchdogScanIntervalMs: 60000,
+  taskWatchdogScanIntervalMs: 60000,
   taskWatchdogMaxAttachmentsPerPoll: 1,
   taskWatchdogInstructions: "Verify stopped work; preserve legitimate blockers.",
 };
