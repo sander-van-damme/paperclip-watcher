@@ -1,229 +1,44 @@
 # paperclip-watcher
 
-A small external supervisor for Paperclip. It watches Paperclip's built-in **Blocked attention** signal and turns a verified `missing_disposition` recovery into a separate task assigned to a configured CEO agent.
+A conservative **CTO idle supervisor** for Paperclip, plus the existing support exporter.
 
-The source task keeps its existing assignee. The CEO receives a recovery task, not ownership of the original task.
+## What triggers a CTO wake?
 
-## Why this exists
+The service observes the CTO's assigned Paperclip issues and recent heartbeat runs. It wakes the CTO only after an observed transition from outstanding assigned work to *all assigned issues closed* (status `done` or `cancelled`), if no CTO run is queued, running or scheduled for retry. An outstanding issue in `backlog`, `todo`, `in_progress`, `in_review`, `blocked`, or an unknown status **prevents** a wake.
 
-A sub-agent can finish useful work but fail to perform its final control-plane action because of model quality, context compaction, tool failure, or an early stop. Requiring the same agent to remember one final `curl` command has the same failure mode.
+The latest CTO run must have `succeeded`; failed, interrupted, timed-out, cancelled or blocked runs do not trigger automatic retries. Rate-limited pending/retrying tasks should therefore not cause wake loops. The agent itself must be `active` or `idle`. The service does **not** independently parse provider rate-limit logs.
 
-Paperclip already detects this condition as `missing_disposition`. This watcher makes the handoff independent of the sub-agent:
+The check repeats every 15 seconds (configurable). The closed-task state must remain stable for 60 seconds, with a five-minute cooldown between wakes. A state file records handled issue signatures and wake timestamps across service restarts; on first start with only terminal tasks, it establishes a baseline without triggering. If the watcher was offline for the whole task lifecycle, it may miss the transition. Paperclip's existing hourly timer can remain as a fallback.
 
-```text
-sub-agent run ends
-      ↓
-Paperclip reports missing_disposition
-      ↓
-paperclip-watcher verifies the active recovery
-      ↓
-create idempotent recovery task assigned to CEO
-      ↓
-Paperclip's normal assignment flow wakes CEO
-      ↓
-CEO inspects source task/recovery and chooses disposition
-```
+## Installation
 
-The watcher intentionally does **not** call `POST /api/agents/:id/wakeup` with the subordinate's source issue. Paperclip's run-dispatch policy treats a generic run on another agent's issue as stale unless that agent is an authorized recovery owner/reviewer. A separate CEO-owned recovery task uses Paperclip's normal ownership and wake semantics instead.
-
-## Requirements
-
-- Linux with systemd
-- Node.js 20.6+
-- npm
-- A Paperclip bearer credential that can:
-  - read company blocked-attention issues;
-  - read issue recovery actions;
-  - create issues and assign them to the CEO.
-- The CEO agent UUID
-
-A board/operator credential is the safest watcher credential. If you use an agent credential, it must have Paperclip's task-assignment authority.
-
-## Configure
+Use Linux, Node.js >=20.6, npm, and a Paperclip board/operator API credential with permissions to read CTO issues/runs and wake the CTO.
 
 ```bash
 npm install
 cp .env.example .env
 nano .env
-```
-
-Required values:
-
-```dotenv
-PAPERCLIP_API_URL=http://127.0.0.1:3100
-PAPERCLIP_API_KEY=...
-PAPERCLIP_CEO_AGENT_ID=...
-```
-
-`PAPERCLIP_COMPANY_ID` is optional. When omitted, the watcher calls `GET /api/agents/:id` once and uses the CEO agent's `companyId`.
-
-The API URL is the Paperclip server root; do **not** append `/api`.
-
-### Optional settings
-
-```dotenv
-PAPERCLIP_WATCHER_POLL_INTERVAL_MS=15000
-PAPERCLIP_WATCHER_REQUEST_TIMEOUT_MS=10000
-PAPERCLIP_WATCHER_PAGE_SIZE=100
-PAPERCLIP_WATCHER_DRY_RUN=true
-```
-
-Dry-run mode detects and verifies missing dispositions without creating CEO recovery tasks.
-
-## Test locally
-
-```bash
 npm run check
-npm run dev
-```
-
-## Support export and download UI
-
-The watcher can create a fast raw Paperclip debugging bundle with the database, run logs, configuration, diagnostics, and storage files.
-
-Create one from the shell:
-
-```bash
-npm run export
-```
-
-The generated archive is written to `.paperclip-exports/` when run manually. Under the systemd service it defaults to `/var/lib/paperclip-watcher/exports`.
-
-While the watcher is running, open port **18787** on the watcher's LAN address, for example:
-
-```text
-http://192.168.1.50:18787/
-```
-
-The HTML page listens on all network interfaces (`0.0.0.0:18787`) and can create new exports and download existing `.tar.gz` bundles. The port is fixed and is not configurable through environment variables.
-
-Because the interface can generate and download debugging bundles, treat port 18787 as a trusted-LAN endpoint and restrict it with your host/network firewall if the machine is reachable from untrusted networks.
-
-### What is exported
-
-- a Paperclip SQL database backup;
-- Paperclip run/server logs;
-- raw Paperclip configuration and environment information;
-- watcher journal output and Paperclip diagnostics;
-- Paperclip storage files, including binary files;
-- a storage manifest and export manifest.
-
-The exporter performs **no content sanitization**. The database backup is copied directly into the bundle without decompressing, parsing, redacting, and recompressing it. Logs, configuration, diagnostics, environment values, and storage are copied raw.
-
-Binary storage files are included. The one explicit exclusion is Paperclip's `secrets/master.key`; the bundle contains a placeholder noting that it was omitted.
-
-**Treat generated archives as sensitive.** This raw mode is intended for trusted local/test environments and should not be shared outside that context.
-
-Optional settings:
-
-```dotenv
-PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED=true
-PAPERCLIP_WATCHER_EXPORT_KEEP=5
-# PAPERCLIP_WATCHER_EXPORT_DIR=/path/to/exports
-```
-
-The HTTP listener is fixed at `0.0.0.0:18787`.
-
-## Install as a systemd service
-
-Run this as your normal Linux user, **not** with `sudo` in front. The installer invokes `sudo` only for operations that need root privileges:
-
-```bash
 npm run install-service
-```
-
-This command:
-
-1. compiles the TypeScript project;
-2. resolves the absolute `paperclipai` CLI path from your current user shell;
-3. embeds that CLI path plus the Node/CLI runtime directories into the generated systemd service environment;
-4. verifies the generated unit with `systemd-analyze verify`;
-5. copies `.env` to `/etc/paperclip-watcher.env` with mode `0600`;
-6. installs `/etc/systemd/system/paperclip-watcher.service`;
-7. enables the service for boot;
-8. starts/restarts it immediately.
-
-The service itself runs as the user who invoked the installer, not as root.
-
-The installer intentionally resolves `paperclipai` at install time instead of relying on systemd's restricted default `PATH`. For example, a CLI installed at `~/.local/bin/paperclipai` will continue to work from the service even if `command -v paperclipai` would otherwise fail inside systemd.
-
-Useful commands:
-
-```bash
 npm run service:status
 npm run service:logs
-sudoedit /etc/paperclip-watcher.env
-sudo systemctl restart paperclip-watcher
 ```
 
-Re-run `npm run install-service` after pulling a newer watcher version so `dist/` and the unit are refreshed.
+Configure `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`, `PAPERCLIP_CTO_AGENT_ID`, and `PAPERCLIP_WATCHER_EXPORT_PASSWORD`. Company ID is inferred from the CTO when omitted. Set `PAPERCLIP_WATCHER_DRY_RUN=true` for a no-wakeup trial.
 
-## Paperclip API behavior verified by the watcher
+The systemd installer creates `/etc/paperclip-watcher.env`, installs a service and persists state under the systemd state directory. After editing deployed env values, restart the service. Re-run `npm run install-service` after pulling updates.
 
-### 1. Find blocked-attention issues
+## Debugging exports
 
-The watcher uses:
+The exporter remains available via `npm run export` or the browser interface on port 18787. The interface uses **HTTP Basic authentication**: enter any username and the password from `PAPERCLIP_WATCHER_EXPORT_PASSWORD` (12+ characters). It binds to **127.0.0.1** by default. Access remotely with `ssh -L 18787:127.0.0.1:18787 USER@SERVER`, then browse to `http://127.0.0.1:18787/`. Do not expose this Basic-auth interface over unencrypted HTTP on a LAN. To disable the browser interface, set `PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED=false`.
 
-```text
-GET /api/companies/:companyId/issues?attention=blocked&limit=N&offset=N
-```
+The exporter includes database backups, raw logs/configuration, storage and diagnostics. Exports may contain **secrets and private data**; only the Paperclip master key is deliberately omitted. The process-environment snapshot masks common secret-like names; this is **not full sanitization**.
 
-Paperclip's blocked-attention service uses its own canonical activity ordering and explicitly rejects `sortField=id`, `afterId`, and ascending ordering for this view. The watcher therefore uses offset pagination only.
+## API
 
-Candidates must report either:
+- `GET /api/agents/:ctoId`
+- `GET /api/companies/:companyId/issues?assigneeAgentId=:ctoId&sortField=id&sortDir=asc&limit=N&afterId=...`
+- `GET /api/companies/:companyId/heartbeat-runs?agentId=:ctoId&limit=200`
+- `POST /api/agents/:ctoId/wakeup`
 
-- `blockedInboxAttention.state === "missing_disposition"`, or
-- `blockedInboxAttention.reason === "missing_successful_run_disposition"`.
-
-### 2. Revalidate the recovery
-
-Before escalating:
-
-```text
-GET /api/issues/:issueId/recovery-actions
-```
-
-The watcher requires the current active action to still have `kind === "missing_disposition"`. Paperclip revalidates the active recovery on this read, so stale attention records are ignored.
-
-### 3. Create the CEO recovery task
-
-The watcher uses:
-
-```text
-POST /api/companies/:companyId/issues
-```
-
-with the CEO as `assigneeAgentId`, a full recovery brief in the description, and:
-
-```text
-idempotencyKey = paperclip-watcher:missing-disposition:<recoveryActionId>
-allowDuplicate = true
-```
-
-Paperclip's normal issue-create path queues an assignment wake for the assigned CEO. The idempotency key makes service restarts safe; `allowDuplicate=true` prevents two distinct recovery episodes from being merged merely because their titles are similar.
-
-### 4. CEO authority on the source recovery
-
-The recovery task does not reassign the source task. Paperclip's recovery-resolution path permits the source assignee, the recovery owner, or an agent with the management override `tasks:manage_active_checkouts` to resolve another agent's recovery. This matches a CEO/manager-above-sub-agent setup.
-
-## Recursion safeguard
-
-Watcher-created tasks start with:
-
-```text
-[Paperclip Watcher Recovery]
-```
-
-If one of those recovery tasks itself ends with a missing disposition, the watcher does not create another nested recovery task indefinitely. It logs a warning and leaves Paperclip's normal board attention in place.
-
-## Scope
-
-The watcher intentionally does not:
-
-- change source issue ownership;
-- mark source tasks done/blocked/in-review itself;
-- resolve source recovery actions itself;
-- infer LLM liveness independently of Paperclip;
-- maintain a local database.
-
-Its only job is to turn Paperclip's verified missing-disposition recovery into one durable, idempotent CEO recovery task.
+The watcher does not mark issues done or modify Paperclip's queues.
