@@ -1,5 +1,7 @@
 import type { Server } from "node:http";
 import { loadConfig } from "./config.js";
+import { CampaignWatchdogSupervisor } from "./campaign-watchdogs.js";
+import { FileCampaignWatchdogStore } from "./campaign-state.js";
 import { startExportHttpServer } from "./export-http.js";
 import { log } from "./logger.js";
 import { PaperclipClient } from "./paperclip-client.js";
@@ -9,7 +11,11 @@ import { PaperclipWatcher } from "./watcher.js";
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function main(): Promise<void> {
   const config = loadConfig();
-  const watcher = new PaperclipWatcher(config, new PaperclipClient(config), new FileStateStore(config.stateDir));
+  const client = new PaperclipClient(config);
+  const watcher = new PaperclipWatcher(config, client, new FileStateStore(config.stateDir));
+  const taskWatchdogs = config.taskWatchdogEnabled
+    ? new CampaignWatchdogSupervisor(config, client, new FileCampaignWatchdogStore(config.stateDir))
+    : null;
   let running = true;
   let server: Server | null = null;
   if ((process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED ?? "true").toLowerCase() !== "false") {
@@ -20,9 +26,16 @@ async function main(): Promise<void> {
     server = await startExportHttpServer();
   }
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { running = false; });
-  log("info", "Paperclip CTO watcher started", { pollIntervalMs: config.pollIntervalMs, dryRun: config.dryRun });
+  log("info", "Paperclip CTO watcher started", {
+    pollIntervalMs: config.pollIntervalMs,
+    dryRun: config.dryRun,
+    taskWatchdogEnabled: config.taskWatchdogEnabled,
+    taskWatchdogScanIntervalMs: config.taskWatchdogScanIntervalMs,
+  });
   let failures = 0;
   let lastReport: string | null = null;
+  let lastTaskWatchdogReport: string | null = null;
+  let nextTaskWatchdogScanAt = 0;
   try {
     while (running) {
       try {
@@ -38,6 +51,21 @@ async function main(): Promise<void> {
       } catch (error) {
         failures++;
         log("error", "Watcher poll failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+      if (running && taskWatchdogs && Date.now() >= nextTaskWatchdogScanAt) {
+        nextTaskWatchdogScanAt = Date.now() + config.taskWatchdogScanIntervalMs;
+        try {
+          const result = await taskWatchdogs.pollOnce();
+          const report = JSON.stringify(result);
+          if (report !== lastTaskWatchdogReport || result.attached > 0 || result.dryRunCandidates > 0) {
+            log("info", "CTO task watchdog coverage", { ...result });
+            lastTaskWatchdogReport = report;
+          }
+        } catch (error) {
+          log("error", "CTO task watchdog scan failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
       if (running) await sleep(Math.min(60_000, config.pollIntervalMs * Math.min(4, failures + 1)));
     }
