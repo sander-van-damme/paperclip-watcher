@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "External watcher that turns Paperclip missing-disposition recoveries into CEO recovery tasks.",
+  "description": "CTO idle supervisor and automatic CEO task-watchdog coverage for Paperclip.",
   "engines": {
     "node": ">=20.6"
   },
