@@ -1,5 +1,5 @@
 [Unit]
-Description=Paperclip missing-disposition watcher
+Description=Paperclip CTO idle supervisor
 After=network-online.target
 Wants=network-online.target
 

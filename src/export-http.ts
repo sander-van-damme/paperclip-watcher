@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { exportAuthorized, challenge } from "./export-auth.js";
 import { stat } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import {
@@ -143,7 +144,9 @@ export async function startExportHttpServer(): Promise<Server> {
   const enabled = (process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED?.trim().toLowerCase() ?? "true") !== "false";
   if (!enabled) throw new Error("Export HTTP server is disabled");
 
-  const host = "0.0.0.0";
+  const host = process.env.PAPERCLIP_WATCHER_EXPORT_BIND_HOST?.trim() || "127.0.0.1";
+  const password = process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD;
+  if (!password || password.length < 12) throw new Error("Export password of at least 12 characters required");
   const port = 18787;
   const settings = resolveExportSettings();
   const state: ExportState = {
@@ -155,6 +158,7 @@ export async function startExportHttpServer(): Promise<Server> {
 
   const server = createServer(async (request, response) => {
     try {
+      if (!exportAuthorized(request, password)) { challenge(response); return; }
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
       if (request.method === "GET" && url.pathname === "/") {

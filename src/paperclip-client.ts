@@ -1,144 +1,58 @@
-import type {
-  AgentSummary,
-  CreatedIssueResponse,
-  IssueSummary,
-  RecoveryAction,
-  RecoveryActionsResponse,
-  WatcherConfig,
-} from "./types.js";
-
+import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, WatcherConfig } from "./types.js";
 export type FetchLike = typeof fetch;
-
-export const WATCHER_RECOVERY_TITLE_PREFIX = "[Paperclip Watcher Recovery]";
-
 export class HttpError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly body: string,
-  ) {
-    super(message);
-    this.name = "HttpError";
+  constructor(message: string, readonly status: number, readonly body: string) {
+    super(message); this.name = "HttpError";
   }
 }
-
 export class PaperclipClient {
-  constructor(
-    private readonly config: WatcherConfig,
-    private readonly fetchImpl: FetchLike = fetch,
-  ) {}
-
+  constructor(private readonly config: WatcherConfig, private readonly fetchImpl: FetchLike = fetch) {}
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const signal = AbortSignal.timeout(this.config.requestTimeoutMs);
-    const response = await this.fetchImpl(`${this.config.apiUrl}${path}`, {
-      ...init,
-      signal,
-      headers: {
-        Authorization: `Bearer ${this.config.apiKey}`,
-        Accept: "application/json",
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
-        ...init.headers,
-      },
+    const response = await this.fetchImpl(this.config.apiUrl + path, {
+      ...init, signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+      headers: {Authorization: "Bearer " + this.config.apiKey, Accept: "application/json",
+        ...(init.body ? {"Content-Type":"application/json"} : {}), ...init.headers},
     });
-
     const text = await response.text();
-    if (!response.ok) {
-      throw new HttpError(
-        `Paperclip ${init.method ?? "GET"} ${path} failed with HTTP ${response.status}`,
-        response.status,
-        text,
-      );
-    }
-
+    if (!response.ok) throw new HttpError("Paperclip " + path + " returned " + response.status, response.status, text);
     if (!text) return undefined as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new Error(`Paperclip returned non-JSON for ${path}`);
-    }
+    return JSON.parse(text) as T;
   }
-
   getAgent(agentId: string): Promise<AgentSummary> {
-    return this.request<AgentSummary>(`/api/agents/${encodeURIComponent(agentId)}`);
+    return this.request("/api/agents/" + encodeURIComponent(agentId));
   }
-
-  async listBlockedIssues(companyId: string): Promise<IssueSummary[]> {
-    const all: IssueSummary[] = [];
-    let offset = 0;
-
-    for (;;) {
-      // Paperclip's blocked-attention list explicitly rejects ID ordering and
-      // afterId cursors. It uses canonical activity ordering and offset paging.
-      const params = new URLSearchParams({
-        attention: "blocked",
-        limit: String(this.config.pageSize),
-        offset: String(offset),
-      });
-
-      const page = await this.request<IssueSummary[]>(
-        `/api/companies/${encodeURIComponent(companyId)}/issues?${params.toString()}`,
-      );
-      all.push(...page);
-
-      if (page.length < this.config.pageSize) break;
-      offset += page.length;
+  async listAssignedIssues(companyId: string, agentId: string): Promise<IssueSummary[]> {
+    const all: IssueSummary[] = [], seen = new Set<string>();
+    let afterId: string | null = null;
+    for (let n=0;n<1000;n++) {
+      const query = new URLSearchParams({assigneeAgentId:agentId,limit:String(this.config.pageSize),
+        sortField:"id",sortDir:"asc"});
+      if (afterId) query.set("afterId", afterId);
+      const page = await this.request<IssueSummary[]>("/api/companies/"+encodeURIComponent(companyId)+"/issues?"+query);
+      if (!Array.isArray(page)) throw new Error("Invalid issues response");
+      for (const issue of page) {
+        if (!issue || !issue.id || issue.assigneeAgentId !== agentId || seen.has(issue.id))
+          throw new Error("Incomplete/repeated CTO issue response");
+        seen.add(issue.id); all.push(issue);
+      }
+      if (page.length < this.config.pageSize) return all;
+      const next = page.at(-1)?.id;
+      if (!next || next === afterId) throw new Error("Issue pagination stalled");
+      afterId = next;
     }
-
-    return all;
+    throw new Error("Issue pagination safety cap");
   }
-
-  getRecoveryActions(issueId: string): Promise<RecoveryActionsResponse> {
-    return this.request<RecoveryActionsResponse>(
-      `/api/issues/${encodeURIComponent(issueId)}/recovery-actions`,
-    );
+  async listAgentRuns(companyId: string, agentId: string): Promise<HeartbeatRunSummary[]> {
+    const query = new URLSearchParams({agentId,limit:"200"});
+    const runs = await this.request<HeartbeatRunSummary[]>("/api/companies/"+encodeURIComponent(companyId)+"/heartbeat-runs?"+query);
+    if (!Array.isArray(runs) || runs.some(r => !r || r.agentId !== agentId || !r.status))
+      throw new Error("Invalid CTO runs response");
+    return runs;
   }
-
-  createCeoRecoveryIssue(input: {
-    companyId: string;
-    issue: IssueSummary;
-    recovery: RecoveryAction;
-  }): Promise<CreatedIssueResponse> {
-    const issueLabel = input.issue.identifier ?? input.issue.id;
-    const evidence = input.recovery.evidence ?? {};
-    const failureSummary =
-      typeof evidence.failureSummary === "string" ? evidence.failureSummary.trim() : "";
-
-    const description = [
-      "Paperclip detected that a task run ended without a valid final disposition.",
-      "",
-      `Source issue: ${issueLabel}`,
-      `Source issue ID: ${input.issue.id}`,
-      ...(input.issue.title ? [`Source title: ${input.issue.title}`] : []),
-      `Source status: ${input.issue.status ?? "unknown"}`,
-      `Source assignee agent ID: ${input.issue.assigneeAgentId ?? "unassigned"}`,
-      `Recovery action ID: ${input.recovery.id}`,
-      `Recovery kind: ${input.recovery.kind}`,
-      ...(input.recovery.cause ? [`Recovery cause: ${input.recovery.cause}`] : []),
-      ...(failureSummary ? [`Failure summary: ${failureSummary}`] : []),
-      ...(input.recovery.nextAction ? [`Paperclip next action: ${input.recovery.nextAction}`] : []),
-      "",
-      "CEO recovery instructions:",
-      "1. Re-read the source issue and its current recovery action before acting. If this recovery is already stale/resolved, do not change the source issue.",
-      "2. Inspect the source task, run result, comments, and recovery evidence and determine the correct source disposition.",
-      "3. Resolve the active source recovery and apply the appropriate source status using Paperclip's normal control-plane tools.",
-      "4. Do not take ownership of the source task merely to perform this recovery. Preserve its existing assignee unless reassignment is an explicit recovery decision.",
-      "5. When the source recovery has been handled, mark this recovery task done.",
-    ].join("\n");
-
-    return this.request<CreatedIssueResponse>(
-      `/api/companies/${encodeURIComponent(input.companyId)}/issues`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          title: `${WATCHER_RECOVERY_TITLE_PREFIX} ${issueLabel}: missing disposition`,
-          description,
-          status: "todo",
-          priority: "high",
-          assigneeAgentId: this.config.ceoAgentId,
-          idempotencyKey: `paperclip-watcher:missing-disposition:${input.recovery.id}`,
-          allowDuplicate: true,
-        }),
-      },
-    );
+  wakeCto(agentId: string, key: string): Promise<WakeupResponse> {
+    return this.request("/api/agents/"+encodeURIComponent(agentId)+"/wakeup", {
+      method:"POST",body:JSON.stringify({source:"automation",triggerDetail:"system",
+        reason:"cto_idle_after_tasks_closed",idempotencyKey:key}),
+    });
   }
 }

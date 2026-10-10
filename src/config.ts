@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { WatcherConfig } from "./types.js";
 
 function required(name: string): string {
@@ -30,7 +31,7 @@ export function loadConfig(): WatcherConfig {
     throw new Error("PAPERCLIP_API_URL must be the server base URL without /api");
   }
 
-  const pageSize = positiveInt("PAPERCLIP_WATCHER_PAGE_SIZE", 100);
+  const pageSize = positiveInt("PAPERCLIP_WATCHER_PAGE_SIZE", 500);
   if (pageSize > 1000) throw new Error("PAPERCLIP_WATCHER_PAGE_SIZE must be <= 1000");
 
   const companyId = process.env.PAPERCLIP_COMPANY_ID?.trim() || undefined;
@@ -38,11 +39,14 @@ export function loadConfig(): WatcherConfig {
   return {
     apiUrl,
     apiKey: required("PAPERCLIP_API_KEY"),
-    ceoAgentId: required("PAPERCLIP_CEO_AGENT_ID"),
+    ctoAgentId: required("PAPERCLIP_CTO_AGENT_ID"),
     ...(companyId ? { companyId } : {}),
     pollIntervalMs: positiveInt("PAPERCLIP_WATCHER_POLL_INTERVAL_MS", 15_000),
     requestTimeoutMs: positiveInt("PAPERCLIP_WATCHER_REQUEST_TIMEOUT_MS", 10_000),
     pageSize,
+    idleGraceMs: positiveInt("PAPERCLIP_WATCHER_IDLE_GRACE_MS", 60000),
+    cooldownMs: positiveInt("PAPERCLIP_WATCHER_COOLDOWN_MS", 300000),
+    stateDir: resolve(process.env.PAPERCLIP_WATCHER_STATE_DIR?.trim() || process.env.STATE_DIRECTORY?.split(":")[0]?.trim() || ".paperclip-watcher-state"),
     dryRun: booleanEnv("PAPERCLIP_WATCHER_DRY_RUN"),
   };
 }

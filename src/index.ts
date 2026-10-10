@@ -3,84 +3,41 @@ import { loadConfig } from "./config.js";
 import { startExportHttpServer } from "./export-http.js";
 import { log } from "./logger.js";
 import { PaperclipClient } from "./paperclip-client.js";
+import { FileStateStore } from "./state.js";
 import { PaperclipWatcher } from "./watcher.js";
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function closeServer(server: Server | null): Promise<void> {
-  if (!server) return;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-}
-
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 async function main(): Promise<void> {
   const config = loadConfig();
-  const client = new PaperclipClient(config);
-  const watcher = new PaperclipWatcher(config, client);
+  const watcher = new PaperclipWatcher(config, new PaperclipClient(config), new FileStateStore(config.stateDir));
   let running = true;
-  let exportServer: Server | null = null;
-
-  const exportHttpEnabled =
-    (process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED?.trim().toLowerCase() ?? "true") !== "false";
-  if (exportHttpEnabled) {
-    try {
-      exportServer = await startExportHttpServer();
-    } catch (error) {
-      log("error", "Support export UI failed to start; watcher will continue", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+  let server: Server | null = null;
+  if ((process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED ?? "true").toLowerCase() !== "false") {
+    // Security-sensitive: do not launch an unauthenticated export listener.
+    if (!process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD || process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD.length < 12) {
+      throw new Error("Set PAPERCLIP_WATCHER_EXPORT_PASSWORD (at least 12 chars) or disable export HTTP");
     }
+    server = await startExportHttpServer();
   }
-
-  const stop = (signal: string) => {
-    if (!running) return;
-    running = false;
-    log("info", "Shutdown requested", { signal });
-  };
-  process.on("SIGTERM", () => stop("SIGTERM"));
-  process.on("SIGINT", () => stop("SIGINT"));
-
-  log("info", "Paperclip watcher started", {
-    apiUrl: config.apiUrl,
-    ceoAgentId: config.ceoAgentId,
-    configuredCompanyId: config.companyId ?? null,
-    pollIntervalMs: config.pollIntervalMs,
-    dryRun: config.dryRun,
-    exportHttpEnabled,
-  });
-
-  let consecutiveFailures = 0;
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { running = false; });
+  log("info", "Paperclip CTO watcher started", { pollIntervalMs: config.pollIntervalMs, dryRun: config.dryRun });
+  let failures = 0;
   try {
     while (running) {
       try {
         const result = await watcher.pollOnce();
-        consecutiveFailures = 0;
-        if (result.candidates > 0 || result.escalated > 0) {
-          log("info", "Poll completed", result);
+        failures = 0;
+        if (!["already_handled", "outstanding_issues", "active_or_retrying_run"].includes(result.state)) {
+          log("info", "CTO state", result);
         }
       } catch (error) {
-        consecutiveFailures += 1;
-        log("error", "Poll failed", {
-          error: error instanceof Error ? error.message : String(error),
-          consecutiveFailures,
-        });
+        failures++;
+        log("error", "Watcher poll failed", { error: error instanceof Error ? error.message : String(error) });
       }
-
-      if (!running) break;
-      const backoffMultiplier = Math.min(4, Math.max(1, consecutiveFailures + 1));
-      await sleep(Math.min(60_000, config.pollIntervalMs * backoffMultiplier));
+      if (running) await sleep(Math.min(60_000, config.pollIntervalMs * Math.min(4, failures + 1)));
     }
   } finally {
-    await closeServer(exportServer);
+    await new Promise<void>(resolve => server ? server.close(() => resolve()) : resolve());
   }
-
-  log("info", "Paperclip watcher stopped");
 }
-
-main().catch((error) => {
-  log("error", "Fatal watcher error", {
-    error: error instanceof Error ? error.stack ?? error.message : String(error),
-  });
-  process.exitCode = 1;
-});
+main().catch(error => { console.error(error); process.exitCode = 1; });
