@@ -5,6 +5,10 @@ import type { TaskWatchdogCoverageStore } from "./task-watchdog-state.js";
 
 const NONTERMINAL = new Set(["backlog", "todo", "in_progress", "in_review", "blocked"]);
 const MAX_PARENT_DEPTH = 100;
+// Paperclip's invokable agent statuses include "running" (and "error").
+// Coverage registration is a control-plane write, not a request to start
+// another execution, so it must not wait for the CTO to become idle.
+const INVOKABLE_STATUSES = new Set(["active", "idle", "running", "error"]);
 
 export interface TaskWatchdogCoveragePollResult {
   candidates: number;
@@ -68,8 +72,8 @@ export class TaskWatchdogCoverageSupervisor {
     if (cto.role !== "cto" || ceo.role !== "ceo" || cto.id === ceo.id) {
       throw new Error("Configured agents must be distinct CTO and CEO agents");
     }
-    if (!["idle", "active"].includes(cto.status) || !["idle", "active"].includes(ceo.status)) {
-      throw new Error("CTO or CEO cannot currently run; skip watchdog attachment");
+    if (!INVOKABLE_STATUSES.has(cto.status) || !INVOKABLE_STATUSES.has(ceo.status)) {
+      throw new Error("CTO or CEO is not invokable; skip task watchdog attachment");
     }
 
     const assigned = await this.client.listAssignedIssues(cto.companyId, cto.id);
