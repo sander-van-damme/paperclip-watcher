@@ -14,6 +14,7 @@ export interface CampaignWatchdogPollResult {
   dryRunCandidates: number;
   skippedKnown: number;
   coveredByAncestor: number;
+  deferredByLimit: number;
 }
 
 /**
@@ -129,6 +130,7 @@ export class CampaignWatchdogSupervisor {
       dryRunCandidates: 0,
       skippedKnown: 0,
       coveredByAncestor: 0,
+      deferredByLimit: 0,
     };
 
     for (const issue of candidates) {
@@ -141,6 +143,12 @@ export class CampaignWatchdogSupervisor {
         continue;
       }
       result.eligible += 1;
+      if (!this.config.dryRun && result.attached >= this.config.taskWatchdogMaxAttachmentsPerPoll) {
+        // Complete the coverage scan for accurate counters without exceeding
+        // the cap on new watchdogs (or generating extra API writes).
+        result.deferredByLimit += 1;
+        continue;
+      }
       const existing = await this.client.getTaskWatchdog(issue.id);
       if (existing !== null) {
         // Never overwrite a manually configured watchdog or instructions.
@@ -176,8 +184,8 @@ export class CampaignWatchdogSupervisor {
         issue: issue.identifier ?? issue.id,
         ceoAgentId: ceo.id,
       });
-      // Bound automatic new CEO work during startup/backfill.
-      if (result.attached >= this.config.taskWatchdogMaxAttachmentsPerPoll) break;
+      // Other potential tasks are still inspected for coverage, but deferred
+      // until a later scan once the attachment limit has been reached.
     }
     return result;
   }
