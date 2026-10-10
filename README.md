@@ -42,3 +42,9 @@ The exporter includes database backups, raw logs/configuration, storage and diag
 - `POST /api/agents/:ctoId/wakeup`
 
 The watcher does not mark issues done or modify Paperclip's queues.
+
+## Inspect blocked CTO wakeups
+
+The `outstanding_issues` log reports `assignedCount` (all CTO-assigned tasks) separately from `outstandingCount` (tasks that are not `done` or `cancelled`). `outstandingIssues` includes each blocking issue's LAB identifier, title and status, up to 30 entries; `omittedOutstandingCount` reports any remaining blockers. Changes to that list produce a new log entry, even when the state name stays the same.
+
+To see the complete current list in the Paperclip CLI, run `paperclipai issue list --company-id COMPANY_UUID --assignee-agent-id CTO_UUID --status backlog,todo,in_progress,in_review,blocked`. A blocked parent campaign assigned to the CTO is a blocker even if its children have finished.
