@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { running = false; });
   log("info", "Paperclip CTO watcher started", { pollIntervalMs: config.pollIntervalMs, dryRun: config.dryRun });
   let failures = 0;
-  let lastState: string | null = null;
+  let lastReport: string | null = null;
   try {
     while (running) {
       try {
@@ -30,9 +30,10 @@ async function main(): Promise<void> {
         failures = 0;
         // Log transitions, including reasons that suppress a wake, but avoid
         // flooding the journal every 15 seconds when nothing has changed.
-        if (result.state !== lastState || result.state === "woken") {
+        const report = JSON.stringify(result);
+        if (report !== lastReport || result.state === "woken") {
           log("info", "CTO state", result);
-          lastState = result.state;
+          lastReport = report;
         }
       } catch (error) {
         failures++;
