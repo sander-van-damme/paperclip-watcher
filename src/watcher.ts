@@ -52,30 +52,28 @@ export class PaperclipWatcher {
         this.state.lastHandledSignature = current;
         await this.stateStore.save(this.state);
       }
-      return this.reset("outstanding_issues");
+      return this.reset("outstanding_issues", issues.length);
     }
     if (issues.length === 0) return this.reset("no_assigned_issues");
     const runs = await this.client.listAgentRuns(companyId, this.config.ctoAgentId);
-    if (runs.some(run => ACTIVE_RUNS.has(run.status))) return this.reset("active_or_retrying_run");
+    if (runs.some(run => ACTIVE_RUNS.has(run.status))) return this.reset("active_or_retrying_run", issues.length);
     if (runs.some(run => !ACTIVE_RUNS.has(run.status) && !["succeeded", ...FAILURE_RUNS].includes(run.status))) {
       return this.reset("unknown_run_status");
     }
     const mostRecent = runs[0];
     if (!mostRecent || mostRecent.status !== "succeeded" || mostRecent.livenessState === "blocked") {
-      return this.reset("last_run_not_successful");
+      return this.reset("last_run_not_successful", issues.length);
     }
 
     const sig = signature(issues);
     if (this.state === null) this.state = await this.stateStore.load();
-    // On a fresh install or first observation, establish a baseline. Never wake merely
-    // because the watcher was installed or the machine rebooted.
-    if (this.state.lastHandledSignature === null) {
-      this.state.lastHandledSignature = sig;
-      await this.stateStore.save(this.state);
-      this.lastObservedSignature = sig;
-      return { state: "baseline_initialized", count: issues.length };
+    // An existing terminal snapshot is eligible on first installation too.
+    // Older versions mistakenly saved that snapshot as handled without
+    // invoking a wake. lastWakeAt=null distinguishes that legacy baseline
+    // from a snapshot for which a wake was actually requested.
+    if (this.state.lastHandledSignature === sig && this.state.lastWakeAt !== null) {
+      return this.reset("already_handled", issues.length);
     }
-    if (this.state.lastHandledSignature === sig) return this.reset("already_handled");
     if (this.lastObservedSignature !== sig) {
       this.lastObservedSignature = sig;
       this.emptySince = this.now();
@@ -100,9 +98,9 @@ export class PaperclipWatcher {
     return { state: this.config.dryRun ? "dry_run" : "woken", count: issues.length };
   }
 
-  private reset(state: string): { state: string; count: number } {
+  private reset(state: string, count = 0): { state: string; count: number } {
     this.emptySince = null;
     this.lastObservedSignature = null;
-    return { state, count: 0 };
+    return { state, count };
   }
 }
