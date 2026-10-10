@@ -38,7 +38,7 @@ if (!existsSync(distPath)) fail("dist/index.js is missing. npm run install-servi
 if (!existsSync(serviceTemplatePath)) fail("systemd/paperclip-watcher.service is missing.");
 
 const envText = readFileSync(envPath, "utf8");
-for (const name of ["PAPERCLIP_API_URL", "PAPERCLIP_API_KEY", "PAPERCLIP_CEO_AGENT_ID"]) {
+for (const name of ["PAPERCLIP_API_URL", "PAPERCLIP_API_KEY", "PAPERCLIP_CTO_AGENT_ID"]) {
   const match = envText.match(new RegExp(`^\\s*${name}\\s*=\\s*(.+?)\\s*$`, "m"));
   const value = match?.[1]?.replace(/^['\"]|['\"]$/g, "").trim();
   if (!value || value === "replace-me" || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)) {
