@@ -32,7 +32,7 @@ async function main(): Promise<void> {
         // flooding the journal every 15 seconds when nothing has changed.
         const report = JSON.stringify(result);
         if (report !== lastReport || result.state === "woken") {
-          log("info", "CTO state", result);
+          log("info", "CTO state", { ...result });
           lastReport = report;
         }
       } catch (error) {
