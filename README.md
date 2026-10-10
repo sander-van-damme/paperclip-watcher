@@ -8,7 +8,7 @@ The service observes the CTO's assigned Paperclip issues and recent heartbeat ru
 
 The latest CTO run must have `succeeded`; failed, interrupted, timed-out, cancelled or blocked runs do not trigger automatic retries. Rate-limited pending/retrying tasks should therefore not cause wake loops. The agent itself must be `active` or `idle`. The service does **not** independently parse provider rate-limit logs.
 
-The check repeats every 15 seconds (configurable). The closed-task state must remain stable for 60 seconds, with a five-minute cooldown between wakes. A state file records handled issue signatures and wake timestamps across service restarts; on first start with only terminal tasks, it establishes a baseline without triggering. If the watcher was offline for the whole task lifecycle, it may miss the transition. Paperclip's existing hourly timer can remain as a fallback.
+The check repeats every 15 seconds (configurable). The closed-task state must remain stable for 60 seconds, with a five-minute cooldown between wakes. A state file records handled issue signatures and wake timestamps across service restarts. On first start, even when the CTO's assigned tasks were already terminal, the watcher may request **one** wake after the idle grace period, provided every other safety gate passes. Already-handled snapshots are not woken again after service restarts. Old watcher state files that recorded a terminal baseline without a wake are automatically eligible for this one-time catch-up. State changes are logged once (including reasons why a wake is suppressed), rather than on every poll. Paperclip's existing hourly timer can remain as a fallback.
 
 ## Installation
 
