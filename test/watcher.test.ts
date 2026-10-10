@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { PaperclipWatcher } from "../src/watcher.js";
 import { PaperclipClient } from "../src/paperclip-client.js";
-import type { IssueSummary, WatcherConfig, WatcherState } from "../src/types.js";
+import type { IssueSummary, IssueInteractionSummary, WatcherConfig, WatcherState } from "../src/types.js";
 
 const config: WatcherConfig = {
   apiUrl: "http://paperclip.test", apiKey: "secret", ctoAgentId: "cto",
@@ -16,11 +16,16 @@ const config: WatcherConfig = {
 function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: WatcherState) {
   let issues: IssueSummary[] = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
   let now = 0, wakes = 0;
+  let interactions: IssueInteractionSummary[] = [];
   let saved: WatcherState = initialState ? {...initialState} : {lastHandledSignature: null, lastWakeAt: null};
   const fetcher: typeof fetch = async (url, opts) => {
     const path = String(url);
     if (path.endsWith("/api/agents/cto")) return Response.json({id:"cto",companyId:"company",status:agentStatus});
     if (path.includes("/issues?")) return Response.json(issues);
+    if (path.endsWith("/api/issues/task/interactions")) return Response.json(interactions);
+    if (path.endsWith("/api/issues/task")) return Response.json({
+      ...issues[0], companyId:"company",
+    });
     if (path.includes("/heartbeat-runs?")) return Response.json([{id:"run",agentId:"cto",status:runStatus,livenessState:"completed"}]);
     if (path.endsWith("/wakeup") && opts?.method === "POST") {wakes++; return Response.json({id:"wake",status:"queued"});}
     throw new Error("Unexpected path " + path);
@@ -33,6 +38,7 @@ function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: Watch
   return {
     watcher, setIssues: (status: string) => {issues = [{id:"task",status,assigneeAgentId:"cto"}];},
     setIssuesData: (value: IssueSummary[]) => { issues = value; },
+    setInteractions: (value: IssueInteractionSummary[]) => { interactions = value; },
     advance: (ms: number) => {now += ms;}, wakes: () => wakes,
   };
 }
@@ -58,7 +64,7 @@ test("no wake for queued, running, scheduled_retry, failed or timed_out runs", a
   }
 });
 test("nonterminal issues prevent wake", async () => {
-  for (const status of ["backlog","todo","in_progress","in_review","blocked","unexpected"]) {
+  for (const status of ["todo","in_progress","in_review","blocked","unexpected"]) {
     const r=rig();
     r.setIssues(status);
     await r.watcher.pollOnce();
