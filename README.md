@@ -4,11 +4,15 @@ A conservative **CTO idle supervisor**, optional automatic **CEO Task Watchdog c
 
 ## What triggers a CTO wake?
 
-The service observes the CTO's assigned Paperclip issues and recent heartbeat runs. It wakes the CTO only after an observed transition from outstanding assigned work to *all assigned issues closed* (status `done` or `cancelled`), if no CTO run is queued, running or scheduled for retry. An outstanding issue in `backlog`, `todo`, `in_progress`, `in_review`, `blocked`, or an unknown status **prevents** a wake.
+The service observes the CTO's assigned Paperclip issues and recent heartbeat runs. It wakes the CTO when **no actionable CTO work is outstanding**, and no CTO run is queued, running or scheduled for retry. `todo`, `in_progress` and `blocked` always prevent an idle heartbeat.
+
+`backlog` is intentionally parked work with no immediate execution expectation and **does not block** a CTO wake. `in_review` is allowed only when Paperclip explicitly identifies the next step as human-owned (a human reviewer, human execution-stage participant, human-addressed/policy-limited interaction or pending formal approval). For agent-owned, ambiguous, or stalled reviews, the watcher still waits.
+
+When all assigned work is `done` or `cancelled`, there is one wake per changed snapshot. While there is parked backlog or verified human-owned review work, the watcher can request **another** heartbeat after the five-minute cooldown so the CTO can research something else instead of waiting on people. This is not a 15-second wake loop; the last successful run must still satisfy all guards. Unknown issue statuses fail closed.
 
 The latest CTO run must have `succeeded`; failed, interrupted, timed-out, cancelled or blocked runs do not trigger automatic retries. Rate-limited pending/retrying tasks should therefore not cause wake loops. The agent itself must be `active` or `idle`. The service does **not** independently parse provider rate-limit logs.
 
-The check repeats every 15 seconds (configurable). The closed-task state must remain stable for 60 seconds, with a five-minute cooldown between wakes. A state file records handled issue signatures and wake timestamps across service restarts. On first start, even when the CTO's assigned tasks were already terminal, the watcher may request **one** wake after the idle grace period, provided every other safety gate passes. Already-handled snapshots are not woken again after service restarts. Old watcher state files that recorded a terminal baseline without a wake are automatically eligible for this one-time catch-up. State changes are logged once (including reasons why a wake is suppressed), rather than on every poll. Paperclip's existing hourly timer can remain as a fallback.
+The check repeats every 15 seconds (configurable). An eligible idle state must remain stable for 60 seconds, with a five-minute cooldown between wakes. A state file records handled issue signatures and wake timestamps across service restarts. On first start, even when the CTO's assigned tasks were already terminal, the watcher may request **one** wake after the idle grace period, provided every other safety gate passes. Already-handled snapshots are not woken again after service restarts. Old watcher state files that recorded a terminal baseline without a wake are automatically eligible for this one-time catch-up. State changes are logged once (including reasons why a wake is suppressed), rather than on every poll. Paperclip's existing hourly timer can remain as a fallback.
 
 ## Optional CEO Task Watchdog coverage
 
@@ -70,7 +74,8 @@ The exporter includes database backups, raw logs/configuration, storage and diag
 - `GET /api/companies/:companyId/heartbeat-runs?agentId=:ctoId&limit=200`
 - `POST /api/agents/:ctoId/wakeup`
 - `GET /api/companies/:companyId/agents` (CEO autodiscovery)
-- `GET /api/issues/:issueId` (parent coverage checks)
+- `GET /api/issues/:issueId` (parent coverage and human execution-stage review checks)
+- `GET /api/issues/:issueId/interactions` (verify pending human review audience)
 - `GET /api/issues/:issueId/watchdog` (existing coverage)
 - `PUT /api/issues/:issueId/watchdog` (one-time CEO attachment)
 
@@ -78,6 +83,6 @@ The watcher does not mark issues done or modify Paperclip's queues.
 
 ## Inspect blocked CTO wakeups
 
-The `outstanding_issues` log reports `assignedCount` (all CTO-assigned tasks) separately from `outstandingCount` (tasks that are not `done` or `cancelled`). `outstandingIssues` includes each blocking issue's LAB identifier, title and status, up to 30 entries; `omittedOutstandingCount` reports any remaining blockers. Changes to that list produce a new log entry, even when the state name stays the same.
+The `outstanding_issues` log reports `assignedCount` (all CTO-assigned tasks) separately from `outstandingCount` (tasks that are actionable, blocked, or have unresolved/agent-owned reviews). A `parkedBacklogCount` and `humanReviewCount` describe safe waits that do not block. `outstandingIssues` includes each blocking issue's LAB identifier, title and status, up to 30 entries; `omittedOutstandingCount` reports any remaining blockers. Changes to that list produce a new log entry, even when the state name stays the same.
 
 To see the complete current list in the Paperclip CLI, run `paperclipai issue list --company-id COMPANY_UUID --assignee-agent-id CTO_UUID --status backlog,todo,in_progress,in_review,blocked`. A blocked parent campaign assigned to the CTO is a blocker even if its children have finished.
