@@ -13,9 +13,9 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const client = new PaperclipClient(config);
   const watcher = new PaperclipWatcher(config, client, new FileStateStore(config.stateDir));
-  const taskWatchdogs = config.taskWatchdogEnabled
-    ? new TaskWatchdogCoverageSupervisor(config, client, new FileTaskWatchdogCoverageStore(config.stateDir))
-    : null;
+  const taskWatchdogs = new TaskWatchdogCoverageSupervisor(
+    config, client, new FileTaskWatchdogCoverageStore(config.stateDir),
+  );
   let running = true;
   let server: Server | null = null;
   if ((process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED ?? "true").toLowerCase() !== "false") {
@@ -29,7 +29,6 @@ async function main(): Promise<void> {
   log("info", "Paperclip CTO watcher started", {
     pollIntervalMs: config.pollIntervalMs,
     dryRun: config.dryRun,
-    taskWatchdogEnabled: config.taskWatchdogEnabled,
     taskWatchdogScanIntervalMs: config.taskWatchdogScanIntervalMs,
   });
   let failures = 0;
@@ -52,7 +51,7 @@ async function main(): Promise<void> {
         failures++;
         log("error", "Watcher poll failed", { error: error instanceof Error ? error.message : String(error) });
       }
-      if (running && taskWatchdogs && Date.now() >= nextTaskWatchdogScanAt) {
+      if (running && Date.now() >= nextTaskWatchdogScanAt) {
         nextTaskWatchdogScanAt = Date.now() + config.taskWatchdogScanIntervalMs;
         try {
           const result = await taskWatchdogs.pollOnce();

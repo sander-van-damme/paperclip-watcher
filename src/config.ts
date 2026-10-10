@@ -36,7 +36,6 @@ export function loadConfig(): WatcherConfig {
 
   const companyId = process.env.PAPERCLIP_COMPANY_ID?.trim() || undefined;
   const ceoAgentId = process.env.PAPERCLIP_CEO_AGENT_ID?.trim() || undefined;
-  const taskWatchdogEnabled = booleanEnv("PAPERCLIP_WATCHER_TASK_WATCHDOG_ENABLED", false);
   const taskWatchdogMaxAttachmentsPerPoll = positiveInt("PAPERCLIP_WATCHER_TASK_WATCHDOG_MAX_ATTACHMENTS_PER_POLL", 1);
   if (taskWatchdogMaxAttachmentsPerPoll > 20) {
     throw new Error("PAPERCLIP_WATCHER_TASK_WATCHDOG_MAX_ATTACHMENTS_PER_POLL must be <= 20");
@@ -54,7 +53,6 @@ export function loadConfig(): WatcherConfig {
     ctoAgentId: required("PAPERCLIP_CTO_AGENT_ID"),
     ...(companyId ? { companyId } : {}),
     ...(ceoAgentId ? { ceoAgentId } : {}),
-    taskWatchdogEnabled,
     taskWatchdogScanIntervalMs: positiveInt("PAPERCLIP_WATCHER_TASK_WATCHDOG_SCAN_INTERVAL_MS", 60_000),
     taskWatchdogMaxAttachmentsPerPoll,
     taskWatchdogInstructions,

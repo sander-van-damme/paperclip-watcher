@@ -58,9 +58,6 @@ export class TaskWatchdogCoverageSupervisor {
   }
 
   async pollOnce(): Promise<TaskWatchdogCoveragePollResult> {
-    if (!this.config.taskWatchdogEnabled) {
-      throw new Error("Task watchdog supervisor is disabled");
-    }
     if (this.known === null) this.known = new Set(await this.store.load());
 
     const cto = await this.client.getAgent(this.config.ctoAgentId);

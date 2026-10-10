@@ -1,6 +1,6 @@
 # paperclip-watcher
 
-A conservative **CTO idle supervisor**, optional automatic **CEO Task Watchdog coverage**, and support exporter for Paperclip.
+A conservative **CTO idle supervisor**, automatic **CEO Task Watchdog coverage**, and support exporter for Paperclip.
 
 ## What triggers a CTO wake?
 
@@ -14,15 +14,15 @@ The latest CTO run must have `succeeded`; failed, interrupted, timed-out, cancel
 
 The check repeats every 15 seconds (configurable). An eligible idle state must remain stable for 60 seconds, with a five-minute cooldown between wakes. A state file records handled issue signatures and wake timestamps across service restarts. On first start, even when the CTO's assigned tasks were already terminal, the watcher may request **one** wake after the idle grace period, provided every other safety gate passes. Already-handled snapshots are not woken again after service restarts. Old watcher state files that recorded a terminal baseline without a wake are automatically eligible for this one-time catch-up. State changes are logged once (including reasons why a wake is suppressed), rather than on every poll. Paperclip's existing hourly timer can remain as a fallback.
 
-## Optional CEO Task Watchdog coverage
+## Automatic CEO Task Watchdog coverage
 
 Paperclip has its own [Task Watchdog](https://github.com/paperclipai/paperclip/blob/main/doc/TASK-WATCHDOG.md) mechanism: it watches a task and its descendants for a stopped subtree, then creates a bounded review task and wakes an independent reviewer. The external watcher only *attaches* that native watchdog. It never repairs dependencies, reassigns CTO tasks or wakes the CEO directly.
 
-**Opt in** by setting `PAPERCLIP_WATCHER_TASK_WATCHDOG_ENABLED=true` in the deployed environment file (`/etc/paperclip-watcher.env`), then restart the systemd service. The watcher discovers the unique company CEO agent automatically. If there is more than one, specify `PAPERCLIP_CEO_AGENT_ID`. Both agents must be in the same company and callable. A CTO or CEO already in the `running` state can still have watchdog coverage configured; registration never starts another agent execution.
+Task Watchdog coverage is **always enabled**, without an environment-variable switch. After startup the service scans existing and new nonterminal CTO task trees and attaches Paperclip's native watchdog to any uncovered tree, at most once per tree. Any enable/disable line left over from an older deployment can be removed from `/etc/paperclip-watcher.env`. The watcher discovers the unique company CEO agent automatically. If there is more than one, specify `PAPERCLIP_CEO_AGENT_ID`. Both agents must be in the same company and callable. A CTO or CEO already in the `running` state can still have watchdog coverage configured; registration never starts another agent execution.
 
 Coverage rules:
 
-- Cover **all nonterminal CTO-assigned tasks** (`backlog`, `todo`, `in_progress`, `in_review`, `blocked`) whether standalone or part of a campaign, including already-open tasks at opt-in time.
+- Cover **all nonterminal CTO-assigned tasks** (`backlog`, `todo`, `in_progress`, `in_review`, `blocked`) whether standalone or part of a campaign, including already-open tasks on startup.
 - Attach **at most one watchdog per task subtree**. A nonterminal CTO ancestor is the preferred watched root; a task under a different agent's parent can have its own watchdog unless an ancestor is already watched. Descendants of Paperclip watchdog review tasks are excluded, avoiding feedback loops.
 - Existing watchdogs with any agent or custom instructions are preserved. The watcher remembers both existing and installed watchdogs on disk, so if one is subsequently disabled, the watcher does not restore it.
 - No watchdog is attached to `done` or `cancelled` tasks. Paperclip itself decides whether the subtree is actually stopped, examining queued/running/retrying work and formal waits.
@@ -33,15 +33,14 @@ Configuration:
 
 | Environment variable | Default |
 | --- | --- |
-| `PAPERCLIP_WATCHER_TASK_WATCHDOG_ENABLED` | `false` |
 | `PAPERCLIP_CEO_AGENT_ID` | Auto-discover unique CEO |
 | `PAPERCLIP_WATCHER_TASK_WATCHDOG_SCAN_INTERVAL_MS` | `60000` |
 | `PAPERCLIP_WATCHER_TASK_WATCHDOG_MAX_ATTACHMENTS_PER_POLL` | `1` (maximum `20`) |
 | `PAPERCLIP_WATCHER_TASK_WATCHDOG_INSTRUCTIONS` | Safe, evidence-first mandate |
 
-The watcher logs `CEO task watchdog attached` and `CTO task watchdog coverage`. A `agent_running` CTO idle-supervisor state is normal while the CTO is executing; it suppresses redundant CTO wakes without preventing task-watchdog registration. Its own recovery remains limited to the existing CTO idle logic; Paperclip owns stopped-tree reviews. **Wake on Demand** must be enabled for CEO and CTO. Their periodic timer heartbeats can remain off.
+The always-on coverage supervisor logs `CEO task watchdog attached` and `CTO task watchdog coverage`. A `agent_running` CTO idle-supervisor state is normal while the CTO is executing; it suppresses redundant CTO wakes without preventing task-watchdog registration. Its own recovery remains limited to the existing CTO idle logic; Paperclip owns stopped-tree reviews. **Wake on Demand** must be enabled for CEO and CTO. Their periodic timer heartbeats can remain off.
 
-**Important limits:** Paperclip's `GET /issues/:id/watchdog` returns only an *active* watchdog. If someone disabled a watchdog **before this supervisor ever saw it**, it cannot distinguish that from a never-configured task and may attach a fresh one when enabled. There is also a small concurrent-edit race because Paperclip exposes an upsert but no create-if-absent request; the watcher double-checks before writing, but that is not atomic. Existing tracked manual disablement is honored.
+**Important limits:** Paperclip's `GET /issues/:id/watchdog` returns only an *active* watchdog. If someone disabled a watchdog **before this supervisor ever saw it**, it cannot distinguish that from a never-configured task and may attach a fresh one during its first scan. There is also a small concurrent-edit race because Paperclip exposes an upsert but no create-if-absent request; the watcher double-checks before writing, but that is not atomic. Existing tracked manual disablement is honored.
 
 ## Installation
 

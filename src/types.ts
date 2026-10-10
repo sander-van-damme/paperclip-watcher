@@ -41,7 +41,6 @@ export interface WatcherConfig {
   apiUrl: string; apiKey: string; ctoAgentId: string; companyId?: string;
   pollIntervalMs: number; requestTimeoutMs: number; pageSize: number;
   idleGraceMs: number; cooldownMs: number; stateDir: string; dryRun: boolean;
-  taskWatchdogEnabled: boolean;
   ceoAgentId?: string;
   taskWatchdogScanIntervalMs: number;
   taskWatchdogMaxAttachmentsPerPoll: number;
