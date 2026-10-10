@@ -1,4 +1,4 @@
-import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, WatcherConfig } from "./types.js";
+import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, TaskWatchdogSummary, WatcherConfig } from "./types.js";
 export type FetchLike = typeof fetch;
 export class HttpError extends Error {
   constructor(message: string, readonly status: number, readonly body: string) {
@@ -21,6 +21,35 @@ export class PaperclipClient {
   getAgent(agentId: string): Promise<AgentSummary> {
     return this.request("/api/agents/" + encodeURIComponent(agentId));
   }
+  async listCompanyAgents(companyId: string): Promise<AgentSummary[]> {
+    const agents = await this.request<AgentSummary[]>("/api/companies/"+encodeURIComponent(companyId)+"/agents");
+    if (!Array.isArray(agents) || agents.some(agent => !agent || typeof agent.id !== "string" ||
+        typeof agent.companyId !== "string" || typeof agent.role !== "string")) {
+      throw new Error("Invalid company agents response");
+    }
+    return agents;
+  }
+
+  getIssue(issueId: string): Promise<IssueSummary> {
+    return this.request<IssueSummary>("/api/issues/"+encodeURIComponent(issueId));
+  }
+
+  async getTaskWatchdog(issueId: string): Promise<TaskWatchdogSummary | null> {
+    const result = await this.request<TaskWatchdogSummary | null>("/api/issues/"+encodeURIComponent(issueId)+"/watchdog");
+    if (result !== null && (!result || result.issueId !== issueId ||
+        !result.watchdogAgentId || result.status !== "active")) {
+      throw new Error("Invalid task watchdog response for " + issueId);
+    }
+    return result;
+  }
+
+  async putTaskWatchdog(issueId: string, agentId: string, instructions: string): Promise<TaskWatchdogSummary> {
+    return this.request<TaskWatchdogSummary>("/api/issues/"+encodeURIComponent(issueId)+"/watchdog", {
+      method: "PUT",
+      body: JSON.stringify({agentId, instructions}),
+    });
+  }
+
   async listAssignedIssues(companyId: string, agentId: string): Promise<IssueSummary[]> {
     const all: IssueSummary[] = [], seen = new Set<string>();
     let afterId: string | null = null;

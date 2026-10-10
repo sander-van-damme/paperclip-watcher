@@ -10,6 +10,8 @@ const config: WatcherConfig = {
   companyId: "company", pollIntervalMs: 15000, requestTimeoutMs: 10000,
   pageSize: 500, idleGraceMs: 60000, cooldownMs: 300000,
   stateDir: "/tmp/test", dryRun: false,
+  taskWatchdogEnabled: false, taskWatchdogScanIntervalMs: 60000,
+  taskWatchdogMaxAttachmentsPerPoll: 1, taskWatchdogInstructions: "Review stopped work.",
 };
 function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: WatcherState) {
   let issues: IssueSummary[] = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
