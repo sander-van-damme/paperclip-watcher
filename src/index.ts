@@ -14,8 +14,8 @@ async function main(): Promise<void> {
   let server: Server | null = null;
   if ((process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED ?? "true").toLowerCase() !== "false") {
     // Security-sensitive: do not launch an unauthenticated export listener.
-    if (!process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD || process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD.length < 12) {
-      throw new Error("Set PAPERCLIP_WATCHER_EXPORT_PASSWORD (at least 12 chars) or disable export HTTP");
+    if (!process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD) {
+      throw new Error("Set PAPERCLIP_WATCHER_EXPORT_PASSWORD or disable export HTTP");
     }
     server = await startExportHttpServer();
   }
