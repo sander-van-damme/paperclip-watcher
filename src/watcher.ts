@@ -55,6 +55,9 @@ export class PaperclipWatcher {
     const companyId = await this.company();
     const agent = await this.client.getAgent(this.config.ctoAgentId);
     if (agent.companyId !== companyId) throw new Error("CTO company mismatch");
+    // CTO already running: no extra wake is appropriate, but this is not
+    // an error. Task-watchdog coverage can still be configured in parallel.
+    if (agent.status === "running") return this.reset("agent_running");
     if (!["active", "idle"].includes(agent.status)) return this.reset("agent_unavailable");
     const issues = await this.client.listAssignedIssues(companyId, this.config.ctoAgentId);
     const unknownIssues = issues.filter(issue => !TERMINAL.has(issue.status) && !WORK.has(issue.status));
