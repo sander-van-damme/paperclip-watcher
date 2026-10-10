@@ -76,7 +76,7 @@ export class PaperclipWatcher {
     const runs = await this.client.listAgentRuns(companyId, this.config.ctoAgentId);
     if (runs.some(run => ACTIVE_RUNS.has(run.status))) return this.reset("active_or_retrying_run", issues.length);
     if (runs.some(run => !ACTIVE_RUNS.has(run.status) && !["succeeded", ...FAILURE_RUNS].includes(run.status))) {
-      return this.reset("unknown_run_status");
+      return this.reset("unknown_run_status", issues.length);
     }
     const mostRecent = runs[0];
     if (!mostRecent || mostRecent.status !== "succeeded" || mostRecent.livenessState === "blocked") {
