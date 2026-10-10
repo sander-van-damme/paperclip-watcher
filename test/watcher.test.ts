@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { PaperclipWatcher } from "../src/watcher.js";
 import { PaperclipClient } from "../src/paperclip-client.js";
-import type { WatcherConfig, WatcherState } from "../src/types.js";
+import type { IssueSummary, WatcherConfig, WatcherState } from "../src/types.js";
 
 const config: WatcherConfig = {
   apiUrl: "http://paperclip.test", apiKey: "secret", ctoAgentId: "cto",
@@ -12,7 +12,7 @@ const config: WatcherConfig = {
   stateDir: "/tmp/test", dryRun: false,
 };
 function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: WatcherState) {
-  let issues = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
+  let issues: IssueSummary[] = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
   let now = 0, wakes = 0;
   let saved: WatcherState = initialState ? {...initialState} : {lastHandledSignature: null, lastWakeAt: null};
   const fetcher: typeof fetch = async (url, opts) => {
@@ -30,6 +30,7 @@ function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: Watch
   const watcher = new PaperclipWatcher(config, new PaperclipClient(config, fetcher), store, () => now);
   return {
     watcher, setIssues: (status: string) => {issues = [{id:"task",status,assigneeAgentId:"cto"}];},
+    setIssuesData: (value: IssueSummary[]) => { issues = value; },
     advance: (ms: number) => {now += ms;}, wakes: () => wakes,
   };
 }
@@ -98,4 +99,37 @@ test("paused CTO is not woken", async()=>{
   r.advance(60000);
   await r.watcher.pollOnce();
   assert.equal(r.wakes(),0);
+});
+
+test("outstanding diagnostics show actual blockers, not total assigned issues", async () => {
+  const r = rig();
+  r.setIssuesData([
+    { id: "parent", identifier: "LAB-221", title: "Campaign: direct heads", status: "blocked", assigneeAgentId: "cto" },
+    { id: "done", identifier: "LAB-223", status: "done", assigneeAgentId: "cto" },
+    { id: "cancel", identifier: "LAB-224", status: "cancelled", assigneeAgentId: "cto" },
+  ]);
+  const result = await r.watcher.pollOnce();
+  assert.equal(result.state, "outstanding_issues");
+  assert.equal(result.assignedCount, 3);
+  assert.equal(result.outstandingCount, 1);
+  assert.deepEqual(result.outstandingIssues, [
+    { id: "parent", identifier: "LAB-221", title: "Campaign: direct heads", status: "blocked" },
+  ]);
+  assert.equal(result.omittedOutstandingCount, 0);
+  assert.equal(r.wakes(), 0);
+});
+
+test("diagnostics cap the list but retain the full outstanding count", async () => {
+  const r = rig();
+  r.setIssuesData(Array.from({length: 35}, (_, index) => ({
+    id: "issue-" + index,
+    identifier: "LAB-" + index,
+    status: "todo",
+    assigneeAgentId: "cto",
+  })));
+  const result = await r.watcher.pollOnce();
+  assert.equal(result.assignedCount, 35);
+  assert.equal(result.outstandingCount, 35);
+  assert.equal(result.outstandingIssues?.length, 30);
+  assert.equal(result.omittedOutstandingCount, 5);
 });

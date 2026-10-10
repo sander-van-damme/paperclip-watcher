@@ -1,6 +1,6 @@
 export interface AgentSummary { id: string; companyId: string; name?: string | null; status: string; }
 export interface IssueSummary {
-  id: string; identifier?: string | null; status: string;
+  id: string; identifier?: string | null; title?: string | null; status: string;
   assigneeAgentId?: string | null; completedAt?: string | null; cancelledAt?: string | null;
 }
 export interface HeartbeatRunSummary {
