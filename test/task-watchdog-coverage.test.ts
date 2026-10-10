@@ -203,3 +203,22 @@ test("invalid or cyclic parent topology fails closed", async () => {
   await assert.rejects(x.newSupervisor().pollOnce());
   assert.equal(x.puts.length,0);
 });
+
+test("attaches watchdog while CTO is actively running", async () => {
+  const x = rig({issues:[issue("live-cto-campaign","in_progress")],ctoStatus:"running"});
+  const result = await x.newSupervisor().pollOnce();
+  assert.equal(result.attached,1);
+  assert.equal(x.puts[0]?.issueId,"live-cto-campaign");
+});
+
+test("attaches watchdog while CEO is running other work", async () => {
+  const x = rig({issues:[issue("live-cto-campaign","in_progress")],ceoStatus:"running"});
+  const result = await x.newSupervisor().pollOnce();
+  assert.equal(result.attached,1);
+});
+
+test("does not configure a watchdog for paused CTO", async () => {
+  const x = rig({issues:[issue("paused","todo")],ctoStatus:"paused"});
+  await assert.rejects(x.newSupervisor().pollOnce(),/not invokable/);
+  assert.equal(x.puts.length,0);
+});
