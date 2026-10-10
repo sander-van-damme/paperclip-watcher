@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import { loadConfig } from "./config.js";
-import { CampaignWatchdogSupervisor } from "./campaign-watchdogs.js";
-import { FileCampaignWatchdogStore } from "./campaign-state.js";
+import { TaskWatchdogCoverageSupervisor } from "./task-watchdog-coverage.js";
+import { FileTaskWatchdogCoverageStore } from "./task-watchdog-state.js";
 import { startExportHttpServer } from "./export-http.js";
 import { log } from "./logger.js";
 import { PaperclipClient } from "./paperclip-client.js";
@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   const client = new PaperclipClient(config);
   const watcher = new PaperclipWatcher(config, client, new FileStateStore(config.stateDir));
   const taskWatchdogs = config.taskWatchdogEnabled
-    ? new CampaignWatchdogSupervisor(config, client, new FileCampaignWatchdogStore(config.stateDir))
+    ? new TaskWatchdogCoverageSupervisor(config, client, new FileTaskWatchdogCoverageStore(config.stateDir))
     : null;
   let running = true;
   let server: Server | null = null;
