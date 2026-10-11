@@ -144,7 +144,7 @@ export async function startExportHttpServer(): Promise<Server> {
   const enabled = (process.env.PAPERCLIP_WATCHER_EXPORT_HTTP_ENABLED?.trim().toLowerCase() ?? "true") !== "false";
   if (!enabled) throw new Error("Export HTTP server is disabled");
 
-  const host = process.env.PAPERCLIP_WATCHER_EXPORT_BIND_HOST?.trim() || "127.0.0.1";
+  const host = process.env.PAPERCLIP_WATCHER_EXPORT_BIND_HOST?.trim() || "0.0.0.0";
   const password = process.env.PAPERCLIP_WATCHER_EXPORT_PASSWORD;
   if (!password) throw new Error("PAPERCLIP_WATCHER_EXPORT_PASSWORD is required");
   const port = 18787;
