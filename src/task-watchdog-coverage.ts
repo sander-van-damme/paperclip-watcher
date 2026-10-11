@@ -263,8 +263,14 @@ export class TaskWatchdogCoverageSupervisor {
         this.observedProblems.delete(issue.id);
         continue;
       }
+      const instructions = [
+        this.config.taskWatchdogInstructions,
+        "Operational stall detected by Paperclip Watcher after at least 10 minutes: " + reason + ". " +
+        "This is not a routine completion review. If the work already resumed, completed, or has a " +
+        "legitimate wait, preserve its truthful state and do not create replacement engineering.",
+      ].join("\n\n");
       const installed = await this.client.putTaskWatchdog(
-        issue.id, ceo.id, this.config.taskWatchdogInstructions,
+        issue.id, ceo.id, instructions,
       );
       if (installed.issueId !== issue.id ||
           installed.watchdogAgentId !== ceo.id ||
