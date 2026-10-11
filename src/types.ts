@@ -25,6 +25,22 @@ export interface IssueSummary {
   companyId?: string; completedAt?: string | null; cancelledAt?: string | null;
   reviewAttention?: IssueReviewAttention | null;
   executionState?: IssueExecutionState | null;
+  blockedInboxAttention?: {
+    state: string;
+    reason: string;
+    owner?: { type: string } | null;
+  } | null;
+  scheduledRetry?: { status: string } | null;
+  activeRun?: { status: string } | null;
+  activeRecoveryAction?: { status: string } | null;
+}
+export interface IssueRunSummary {
+  runId: string;
+  agentId: string;
+  status: string;
+  errorCode?: string | null;
+  createdAt: string;
+  scheduledRetryAt?: string | null;
 }
 export interface HeartbeatRunSummary {
   id: string; agentId: string; status: string; livenessState?: string | null;
