@@ -32,7 +32,7 @@ Paperclip itself handles the scoped stopped-subtree repair once attached. The ex
 
 Up to one new watchdog is attached per scan by default (60-second scans); configure `PAPERCLIP_WATCHER_TASK_WATCHDOG_MAX_ATTACHMENTS_PER_POLL` when necessary (maximum 20). The watcher discovers the company CEO, or uses `PAPERCLIP_CEO_AGENT_ID` when provided. Set `PAPERCLIP_WATCHER_DRY_RUN=true` to preview detection without any writes. **Wake on Demand** must be enabled for CEO and CTO. Both timer heartbeats can remain off.
 
-**Limits:** Purely semantic errors in successfully completed research are not operational stalls and will not be detected. The Watcher also intentionally avoids escalating ambiguous waits or runs already undergoing Paperclip recovery. There is still a small concurrent-change race between the last recheck and native watchdog creation because Paperclip only offers an upsert endpoint; this cannot be made atomic by the external watcher.
+**Limits:** Purely semantic errors in successfully completed research are not operational stalls and will not be detected. The Watcher also intentionally avoids escalating ambiguous waits or runs already undergoing Paperclip recovery. **Silent but still-running processes are different:** Paperclip's native task watchdog deliberately will not fire while a run is active, even if the process has stopped producing output. Those need the separate active-run silence monitor / an explicit CEO recovery workflow and are not yet fixed by this change. There is still a small concurrent-change race between the last recheck and native watchdog creation because Paperclip only offers an upsert endpoint; this cannot be made atomic by the external watcher.
 
 ## Installation
 
