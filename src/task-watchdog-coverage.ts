@@ -3,7 +3,17 @@ import { PaperclipClient } from "./paperclip-client.js";
 import type { WatcherConfig, IssueSummary, AgentSummary } from "./types.js";
 import type { TaskWatchdogCoverageStore } from "./task-watchdog-state.js";
 
-const NONTERMINAL = new Set(["backlog", "todo", "in_progress", "in_review", "blocked"]);
+const INVESTIGABLE = new Set(["todo", "in_progress", "in_review", "blocked"]);
+const LIVE_RUNS = new Set(["queued", "running", "scheduled_retry"]);
+const ACTIONABLE_BLOCKERS = new Set([
+  "blocked_by_unassigned_issue", "blocked_by_assigned_backlog_issue",
+  "blocked_by_uninvokable_assignee", "blocked_by_cancelled_issue",
+  "blocked_chain_stalled", "invalid_review_participant",
+  "in_review_without_action_path", "missing_successful_run_disposition",
+]);
+// Seeing a failed run once is not an incident. Confirm the same unresolved
+// signal across polls before opting into Paperclip's native task watchdog.
+const PROBLEM_CONFIRM_MS = 10 * 60_000;
 const MAX_PARENT_DEPTH = 100;
 // Paperclip's invokable agent statuses include "running" (and "error").
 // Coverage registration is a control-plane write, not a request to start
@@ -19,24 +29,65 @@ export interface TaskWatchdogCoveragePollResult {
   skippedKnown: number;
   coveredByAncestor: number;
   deferredByLimit: number;
+  detectedProblems: number;
+  settlingProblems: number;
 }
 
 /**
- * Protect every open CTO task, without creating a second watchdog for its
- * children. The Paperclip task watchdog itself owns stopped-subtree detection,
- * recovery tasks, run/queue checks and idempotency.
- *
- * This external service ONLY opts task roots in. It never edits dependencies,
- * manually wakes the CEO, or changes issue statuses.
+ * Opt into a native CEO task watchdog ONLY after the same evidence-backed
+ * operational stall persists. Normal completion must never trigger a review.
+ * Existing watchdogs remain untouched. This service only attaches watchdogs;
+ * Paperclip itself handles the stopped-subtree review and repair.
  */
 export class TaskWatchdogCoverageSupervisor {
   private known: Set<string> | null = null;
+  private readonly observedProblems = new Map<string, { reason: string; since: number }>();
 
   constructor(
     private readonly config: WatcherConfig,
     private readonly client: PaperclipClient,
     private readonly store: TaskWatchdogCoverageStore,
+    private readonly now: () => number = Date.now,
   ) {}
+
+  private async stalledReason(issue: IssueSummary): Promise<string | null> {
+    // Issue state can change between list and detail reads. Never use stale
+    // or ambiguous evidence to configure a native watchdog.
+    const detail = await this.client.getIssue(issue.id);
+    if (detail.id !== issue.id || detail.companyId !== issue.companyId ||
+        detail.assigneeAgentId !== this.config.ctoAgentId ||
+        detail.status !== issue.status || detail.parentId !== issue.parentId) return null;
+
+    if (detail.activeRun && LIVE_RUNS.has(detail.activeRun.status)) return null;
+    if (detail.scheduledRetry && LIVE_RUNS.has(detail.scheduledRetry.status)) return null;
+
+    if (detail.status === "in_review") {
+      return detail.reviewAttention?.state === "stalled" ? "stalled_review" : null;
+    }
+
+    if (detail.status === "blocked") {
+      const attention = detail.blockedInboxAttention;
+      if (!attention || !["needs_attention", "missing_disposition"].includes(attention.state) ||
+          !ACTIONABLE_BLOCKERS.has(attention.reason) ||
+          attention.owner?.type === "user" || attention.owner?.type === "external") return null;
+      return "blocked_attention:" + attention.reason;
+    }
+
+    if (detail.status !== "todo" && detail.status !== "in_progress") return null;
+    // Paperclip owns any active source-scoped recovery. Do not race or
+    // duplicate its bounded retry, monitor, escalation or human wait path.
+    if (detail.activeRecoveryAction?.status === "active") return null;
+
+    const runs = await this.client.listIssueRuns(issue.id);
+    const latest = runs
+      .filter(run => run.agentId === this.config.ctoAgentId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (!latest || !["failed", "timed_out"].includes(latest.status) ||
+        ["provider_quota", "rate_limit", "issue_dependencies_blocked",
+         "issue_terminal_status", "issue_cancelled"].includes(latest.errorCode ?? "")) return null;
+    // Key observation by run identity. A new attempt resets the grace period.
+    return "terminal_failure:" + latest.runId + ":" + latest.status;
+  }
 
   private async remember(issueId: string): Promise<void> {
     if (!this.known) throw new Error("Task watchdog tracking state not loaded");
@@ -106,9 +157,8 @@ export class TaskWatchdogCoverageSupervisor {
         const parent = await loadParent(parentId);
         if (parent.parentId === undefined) throw new Error("Parent issue missing parentId: " + parent.id);
         if (parent.originKind === "task_watchdog") return true;
-        // An active CTO ancestor will itself be covered as a root. Do not
-        // attach separate watchdogs to its descendant tasks.
-        if (parent.assigneeAgentId === cto.id && NONTERMINAL.has(parent.status)) return true;
+        // Do not assume an active CTO ancestor has a watchdog. Under selective
+        // coverage a healthy parent must not hide a genuinely stuck child.
         // Respect both existing parent watchers and past explicit removals
         // known to this service.
         if (this.known!.has(parent.id) || await parentHasWatchdog(parent.id)) return true;
@@ -121,8 +171,24 @@ export class TaskWatchdogCoverageSupervisor {
       if (issue.parentId === undefined || issue.originKind === undefined) {
         throw new Error("Issue list omitted task ancestry/origin fields for " + issue.id);
       }
-      return NONTERMINAL.has(issue.status) && issue.originKind !== "task_watchdog";
+      return INVESTIGABLE.has(issue.status) && issue.originKind !== "task_watchdog";
     });
+    // Prefer parents if both a parent and a child independently show a stall.
+    const depth = (issue: IssueSummary): number => {
+      const visited = new Set([issue.id]);
+      let parentId = issue.parentId, result = 0;
+      while (parentId && byId.has(parentId) && !visited.has(parentId)) {
+        visited.add(parentId);
+        result++;
+        parentId = byId.get(parentId)!.parentId;
+      }
+      return result;
+    };
+    candidates.sort((a, b) => depth(a) - depth(b) || a.id.localeCompare(b.id));
+    const candidatesIds = new Set(candidates.map(issue => issue.id));
+    for (const id of this.observedProblems.keys()) {
+      if (!candidatesIds.has(id)) this.observedProblems.delete(id);
+    }
     const result: TaskWatchdogCoveragePollResult = {
       candidates: candidates.length,
       eligible: 0,
@@ -132,29 +198,50 @@ export class TaskWatchdogCoverageSupervisor {
       skippedKnown: 0,
       coveredByAncestor: 0,
       deferredByLimit: 0,
+      detectedProblems: 0,
+      settlingProblems: 0,
     };
 
     for (const issue of candidates) {
       if (await coveredByParent(issue)) {
         result.coveredByAncestor += 1;
+        this.observedProblems.delete(issue.id);
         continue;
       }
       if (this.known.has(issue.id)) {
         result.skippedKnown += 1;
-        continue;
-      }
-      result.eligible += 1;
-      if (!this.config.dryRun && result.attached >= this.config.taskWatchdogMaxAttachmentsPerPoll) {
-        // Complete the coverage scan for accurate counters without exceeding
-        // the cap on new watchdogs (or generating extra API writes).
-        result.deferredByLimit += 1;
+        this.observedProblems.delete(issue.id);
         continue;
       }
       const existing = await this.client.getTaskWatchdog(issue.id);
       if (existing !== null) {
-        // Never overwrite a manually configured watchdog or instructions.
+        // Leave all existing (including manually configured) watchdogs alone.
         await this.remember(issue.id);
         result.alreadyConfigured += 1;
+        this.observedProblems.delete(issue.id);
+        continue;
+      }
+
+      const reason = await this.stalledReason(issue);
+      if (!reason) {
+        this.observedProblems.delete(issue.id);
+        continue;
+      }
+      result.detectedProblems += 1;
+      const observed = this.observedProblems.get(issue.id);
+      if (!observed || observed.reason !== reason) {
+        this.observedProblems.set(issue.id, { reason, since: this.now() });
+        result.settlingProblems += 1;
+        continue;
+      }
+      if (this.now() - observed.since < PROBLEM_CONFIRM_MS) {
+        result.settlingProblems += 1;
+        continue;
+      }
+
+      result.eligible += 1;
+      if (!this.config.dryRun && result.attached >= this.config.taskWatchdogMaxAttachmentsPerPoll) {
+        result.deferredByLimit += 1;
         continue;
       }
       if (this.config.dryRun) {
@@ -162,13 +249,17 @@ export class TaskWatchdogCoverageSupervisor {
         continue;
       }
 
-      // Paperclip's API provides an upsert rather than an atomic
-      // create-only endpoint. Double-check before PUT to reduce, but not
-      // eliminate, the concurrent human configuration race.
+      // Re-read authoritative issue and watchdog state immediately before
+      // the write; a task might have completed, retried or gained coverage.
+      if (await this.stalledReason(issue) !== reason) {
+        this.observedProblems.delete(issue.id);
+        continue;
+      }
       const rechecked = await this.client.getTaskWatchdog(issue.id);
       if (rechecked !== null) {
         await this.remember(issue.id);
         result.alreadyConfigured += 1;
+        this.observedProblems.delete(issue.id);
         continue;
       }
       const installed = await this.client.putTaskWatchdog(
@@ -180,9 +271,11 @@ export class TaskWatchdogCoverageSupervisor {
         throw new Error("Unexpected Paperclip watchdog response for " + issue.id);
       }
       await this.remember(issue.id);
+      this.observedProblems.delete(issue.id);
       result.attached += 1;
-      log("info", "CEO task watchdog attached", {
+      log("info", "CEO task watchdog attached for stalled work", {
         issue: issue.identifier ?? issue.id,
+        reason,
         ceoAgentId: ceo.id,
       });
       // Other potential tasks are still inspected for coverage, but deferred
