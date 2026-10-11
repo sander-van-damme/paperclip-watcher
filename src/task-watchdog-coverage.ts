@@ -142,6 +142,7 @@ export class TaskWatchdogCoverageSupervisor {
       const cached = ancestorWatchdogs.get(id);
       if (cached !== undefined) return cached;
       const exists = (await this.client.getTaskWatchdog(id)) !== null;
+      if (exists) await this.remember(id);
       ancestorWatchdogs.set(id, exists);
       return exists;
     };
