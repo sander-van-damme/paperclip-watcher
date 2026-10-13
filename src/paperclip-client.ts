@@ -18,6 +18,16 @@ export class PaperclipClient {
     if (!text) return undefined as T;
     return JSON.parse(text) as T;
   }
+  async getHeartbeatRun(runId: string): Promise<HeartbeatRunSummary> {
+    const run = await this.request<HeartbeatRunSummary>(
+      "/api/heartbeat-runs/" + encodeURIComponent(runId),
+    );
+    if (!run || run.id !== runId || typeof run.agentId !== "string" ||
+        typeof run.status !== "string") {
+      throw new Error("Invalid Paperclip heartbeat run detail");
+    }
+    return run;
+  }
   getAgent(agentId: string): Promise<AgentSummary> {
     return this.request("/api/agents/" + encodeURIComponent(agentId));
   }
