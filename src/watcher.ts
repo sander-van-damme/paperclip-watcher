@@ -134,6 +134,12 @@ export class PaperclipWatcher {
     }
     if (handoff === "waiting") return { state: "waiting_for_human", ...report };
 
+    // Checking local usage costs no tokens. Never wake when quota is exhausted
+    // or unverified, regardless of whether independent work looks available.
+    if (quota && quota.availability !== "available") {
+      return { state: quota.availability === "exhausted" ? "quota_exhausted" : "quota_unknown", ...report };
+    }
+
     // Blocked parent campaigns can coexist with real independent CTO work.
     // Give the CTO at most one bounded opportunity per unchanged work
     // snapshot, but never invent a task or bypass an actual dependency.
@@ -158,12 +164,6 @@ export class PaperclipWatcher {
     const quotaFailed = latest.status === "failed" && latest.errorCode === "provider_quota";
     if (latest.status !== "succeeded" && !(quotaFailed && quota?.availability === "available")) {
       return this.reset("last_run_not_successful", issues.length);
-    }
-
-    // Unknown quota is *not* proof of a reset. Keep existing manual/native
-    // Paperclip recovery paths intact, but do not add an extra watcher wake.
-    if (quota && quota.availability !== "available") {
-      return { state: quota.availability === "exhausted" ? "quota_exhausted" : "quota_unknown", ...report };
     }
 
     const baseSig = signature(issues, backlogIds, humanReviewIds);
