@@ -107,8 +107,22 @@ export class PaperclipWatcher {
     if (runs.some(run => !ACTIVE_RUNS.has(run.status) && !["succeeded", ...FAILURE_RUNS].includes(run.status))) {
       return this.reset("unknown_run_status", issues.length);
     }
-    const latest = runs[0];
-    if (!latest) return this.reset("last_run_not_successful", issues.length);
+    const latestRow = runs[0];
+    if (!latestRow) return this.reset("last_run_not_successful", issues.length);
+    // The Paperclip list endpoint is abbreviated; errorCode and contextSnapshot
+    // are not reliably present. Read the authoritative detail before resuming.
+    let latest = latestRow;
+    if (latestRow.status === "failed" ||
+        (latestRow.status === "succeeded" && outstandingIssues.length > 0)) {
+      try {
+        latest = await this.client.getHeartbeatRun(latestRow.id);
+        if (latest.agentId !== this.config.ctoAgentId) {
+          return this.reset("latest_run_agent_mismatch", issues.length);
+        }
+      } catch {
+        return this.reset("latest_run_detail_failed", issues.length);
+      }
+    }
 
     // A genuine human wait, with nothing independently actionable, is not
     // a reason to wake the CTO repeatedly. Paperclip natively wakes the
@@ -123,10 +137,11 @@ export class PaperclipWatcher {
     // The CTO's simple, current-run handoff takes precedence over guesses
     // from freeform run output. Never trust an older comment or another agent.
     let handoff: "waiting" | "ready" | null = null;
-    if (latest.status === "succeeded" && latest.contextSnapshot?.issueId) {
+    if (latest.status === "succeeded" && (latest.contextSnapshot?.issueId || latest.contextSnapshot?.taskId || latest.nativeIssueId)) {
       try {
         handoff = await readLatestCtoHandoff(
-          this.client, latest.contextSnapshot.issueId, latest.id, this.config.ctoAgentId,
+          this.client, latest.contextSnapshot?.issueId ?? latest.contextSnapshot?.taskId ?? latest.nativeIssueId,
+          latest.id, this.config.ctoAgentId,
         );
       } catch {
         return this.reset("handoff_lookup_failed", issues.length);
