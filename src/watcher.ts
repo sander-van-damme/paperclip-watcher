@@ -112,8 +112,7 @@ export class PaperclipWatcher {
     // The Paperclip list endpoint is abbreviated; errorCode and contextSnapshot
     // are not reliably present. Read the authoritative detail before resuming.
     let latest = latestRow;
-    if (latestRow.status === "failed" ||
-        (latestRow.status === "succeeded" && independent)) {
+    if (latestRow.status === "failed" || latestRow.status === "succeeded") {
       try {
         latest = await this.client.getHeartbeatRun(latestRow.id);
         if (latest.agentId !== this.config.ctoAgentId) {
