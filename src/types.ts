@@ -49,7 +49,7 @@ export interface IssueRunSummary {
   scheduledRetryAt?: string | null;
 }
 export interface HeartbeatRunSummary {
-  id: string; agentId: string; status: string; livenessState?: string | null; errorCode?: string | null; contextSnapshot?: { issueId?: string | null } | null;
+  id: string; agentId: string; status: string; livenessState?: string | null; errorCode?: string | null; contextSnapshot?: { issueId?: string | null; taskId?: string | null } | null; nativeIssueId?: string | null;
 }
 export interface WakeupResponse { id?: string; status: string; reason?: string | null; }
 export interface TaskWatchdogSummary {
