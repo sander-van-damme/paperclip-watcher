@@ -184,7 +184,10 @@ export class PaperclipWatcher {
       return this.reset("last_run_not_successful", issues.length);
     }
 
-    const baseSig = signature(issues, backlogIds, humanReviewIds);
+    // Version nonterminal eligibility separately from the legacy stored
+    // "blocked" snapshot, which was persisted even without a wake.
+    const baseSig = signature(issues, backlogIds, humanReviewIds) +
+      (independent || outstandingIssues.length > 0 ? ":continuation-v2" : "");
     const sig = (quotaRecovery && independent)
       ? baseSig + ":quota-recovered:" + quota!.recoveryEpoch : baseSig;
     if (this.state === null) this.state = await this.stateStore.load();
