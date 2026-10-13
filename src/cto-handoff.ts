@@ -12,7 +12,7 @@ export async function readLatestCtoHandoff(
   const comments = await client.listIssueComments(issueId);
   for (const comment of comments) {
     if (comment.authorAgentId !== ctoId || comment.createdByRunId !== runId) continue;
-    const tokens = comment.body.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+    const tokens = comment.body.split(/\r?\n/).map((v: string) => v.trim()).filter(Boolean);
     if (tokens.includes("WATCHER: WAITING_FOR_HUMAN")) return "waiting";
     if (tokens.includes("WATCHER: READY")) return "ready";
   }
