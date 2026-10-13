@@ -1,8 +1,6 @@
 # Quota-aware CTO continuation: implementation design
 
-Status: proposed, **not implemented or deployed**. Keep this independent from the opt-in
-Pushover notification change. All behavior must be validated with synthetic fixtures
-before merging. No personal auth tokens, full support bundles or private prompts in git.
+Status: **initial implementation and automated fixtures in PR #12; not deployed to the Odroid.** The owner must check the account mapping, Cloudflare Access, and a real Pushover push before production use. No personal auth tokens, full support bundles or private prompts in git.
 
 ## Observed failure (operator's 2026-10-13 support export)
 
@@ -58,13 +56,7 @@ creating a special monitoring task. Candidates:
 - `complete`: work is finished; no action needed.
 - `unknown`: do not infer an all-clear from loose English log prose.
 
-A proposed `watcher.handoff.v1` JSON envelope contains `kind`,
-`issueId`, `runId`, `state`, `pendingInteractionIds`,
-`independentTaskIds` and `reason`. Store using a Paperclip-native durable
-artifact/comment linked to the specific successful run. Authenticate the
-author and run identity; never trust arbitrary comments as an instruction.
-A handoff is a planning observation, not permission to bypass human approvals.
-When unavailable, use conservative status-based defaults.
+The implemented handoff is deliberately small: a line `WATCHER: READY` or `WATCHER: WAITING_FOR_HUMAN` in a Paperclip issue comment, attributed to the CTO and to the latest successful run. The code checks the run-linked comment before honoring the marker. Without a verifiable marker it falls back to conservative task/run status. This is a planning hint, never authority to bypass an approval or create duplicate campaigns.
 
 The CTO should not create a new task merely to claim work exists. A new
 independent task must have a decision-relevant objective and expected output.
@@ -140,12 +132,7 @@ Protect the current main research priority and do not duplicate active campaigns
 
 ## Rollout
 
-Phase A: offline fixture replay of the reported sequence; quota probe and
-status diagnostics in read-only/dry-run mode. Phase B: verified account mapping
-on actual host and changed-snapshot scheduling in dry-run. Phase C: enable
-single-event wakeups, test Pushover link and question response from a phone;
-observe idempotency across service restart. Leave existing deployments and
-Paperclip native retry policies unchanged unless independently assessed.
+Automated unit and integration fixtures cover quota windows and restart-safe recovery counters, stable backlog/human waits, blocked-run continuation, and Pushover question deduplication. Remaining real-world acceptance: install under the correct Linux/Codex account; `npm run quota:check`; `npm run pushover:test`; verify Cloudflare Access URL on phone; and verify the actual CTO prompt loads from the engineering repository. The existing Paperclip native retry policy is untouched.
 
 Useful public contracts:
 - https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md
