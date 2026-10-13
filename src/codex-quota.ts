@@ -66,7 +66,7 @@ export function readLocalCodexQuota(
       else resolve(value!);
     };
     const timer = setTimeout(() => settle(new Error("Codex app-server rate limit probe timed out")), timeoutMs);
-    child.on("error", error => settle(new Error("Codex quota probe could not start: " + error.code)));
+    child.on("error", error => settle(new Error("Codex quota probe could not start: " + ("code" in error ? String(error.code) : "unknown"))));
     child.on("close", code => {
       if (!complete) settle(new Error("Codex quota probe ended before response: " + code));
     });
