@@ -44,7 +44,7 @@ export function loadConfig(): WatcherConfig {
   const pushUrl = process.env.PAPERCLIP_WATCHER_PUSHOVER_PAPERCLIP_URL?.trim() || (pushToken ? "https://shapedisplay.sandervandamme.net" : undefined);
   const pushUserId = process.env.PAPERCLIP_WATCHER_PUSHOVER_USER_ID?.trim();
   if ([pushToken, pushUser].some(Boolean) && ![pushToken, pushUser].every(Boolean)) {
-    throw new Error("Pushover requires TOKEN, USER, and PAPERCLIP_URL");
+    throw new Error("Pushover requires both PAPERCLIP_WATCHER_PUSHOVER_TOKEN and PAPERCLIP_WATCHER_PUSHOVER_USER");
   }
   if (pushUrl) {
     const url = new URL(pushUrl);
