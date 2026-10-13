@@ -5,6 +5,10 @@ import { FileTaskWatchdogCoverageStore } from "./task-watchdog-state.js";
 import { startExportHttpServer } from "./export-http.js";
 import { log } from "./logger.js";
 import { PaperclipClient } from "./paperclip-client.js";
+import { HumanInputNotifier } from "./human-input-notifier.js";
+import { readLocalCodexQuota } from "./codex-quota.js";
+import { CodexQuotaMonitor } from "./codex-quota-monitor.js";
+import type { QuotaReport } from "./codex-quota-monitor.js";
 import { FileStateStore } from "./state.js";
 import { PaperclipWatcher } from "./watcher.js";
 
@@ -12,7 +16,12 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 async function main(): Promise<void> {
   const config = loadConfig();
   const client = new PaperclipClient(config);
+  const notifier = config.pushover ? new HumanInputNotifier(client, config.stateDir, config.pushover) : null;
+  const companyId = notifier ? (config.companyId ?? (await client.getAgent(config.ctoAgentId)).companyId) : null;
   const watcher = new PaperclipWatcher(config, client, new FileStateStore(config.stateDir));
+  const quotaMonitor = config.codexQuota ? new CodexQuotaMonitor(config.stateDir, () =>
+    readLocalCodexQuota(config.codexQuota!.executable, config.codexQuota!.expectedAccountId),
+  ) : null;
   const taskWatchdogs = new TaskWatchdogCoverageSupervisor(
     config, client, new FileTaskWatchdogCoverageStore(config.stateDir),
   );
@@ -35,10 +44,30 @@ async function main(): Promise<void> {
   let lastReport: string | null = null;
   let lastTaskWatchdogReport: string | null = null;
   let nextTaskWatchdogScanAt = 0;
+  let nextNotificationScanAt = 0;
+  let nextQuotaScanAt = 0;
+  let quotaReport: QuotaReport | undefined;
+  let lastQuotaReport: string | null = null;
   try {
     while (running) {
+      if (running && quotaMonitor && config.codexQuota && Date.now() >= nextQuotaScanAt) {
+        nextQuotaScanAt = Date.now() + config.codexQuota.intervalMs;
+        try {
+          quotaReport = await quotaMonitor.poll();
+          const report = JSON.stringify(quotaReport);
+          if (report !== lastQuotaReport) {
+            log("info", "Local Codex quota", { ...quotaReport });
+            lastQuotaReport = report;
+          }
+        } catch (error) {
+          quotaReport = { availability: "unknown", recoveryEpoch: 0, reason: "state_error" };
+          log("error", "Codex quota monitor state failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       try {
-        const result = await watcher.pollOnce();
+        const result = await watcher.pollOnce(quotaReport);
         failures = 0;
         // Log transitions, including reasons that suppress a wake, but avoid
         // flooding the journal every 15 seconds when nothing has changed.
@@ -62,6 +91,17 @@ async function main(): Promise<void> {
           }
         } catch (error) {
           log("error", "CTO task watchdog scan failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (running && notifier && companyId && Date.now() >= nextNotificationScanAt) {
+        nextNotificationScanAt = Date.now() + 60_000;
+        try {
+          const count = await notifier.poll(companyId, config.ctoAgentId);
+          if (count > 0) log("info", "Pushover human-input notifications", { sent: count });
+        } catch (error) {
+          log("error", "Pushover human-input scan failed", {
             error: error instanceof Error ? error.message : String(error),
           });
         }

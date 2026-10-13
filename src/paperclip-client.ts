@@ -1,4 +1,4 @@
-import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, TaskWatchdogSummary, IssueInteractionSummary, IssueRunSummary, WatcherConfig } from "./types.js";
+import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, TaskWatchdogSummary, IssueInteractionSummary, IssueRunSummary, IssueCommentSummary, WatcherConfig } from "./types.js";
 export type FetchLike = typeof fetch;
 export class HttpError extends Error {
   constructor(message: string, readonly status: number, readonly body: string) {
@@ -18,6 +18,16 @@ export class PaperclipClient {
     if (!text) return undefined as T;
     return JSON.parse(text) as T;
   }
+  async getHeartbeatRun(runId: string): Promise<HeartbeatRunSummary> {
+    const run = await this.request<HeartbeatRunSummary>(
+      "/api/heartbeat-runs/" + encodeURIComponent(runId),
+    );
+    if (!run || run.id !== runId || typeof run.agentId !== "string" ||
+        typeof run.status !== "string") {
+      throw new Error("Invalid Paperclip heartbeat run detail");
+    }
+    return run;
+  }
   getAgent(agentId: string): Promise<AgentSummary> {
     return this.request("/api/agents/" + encodeURIComponent(agentId));
   }
@@ -34,6 +44,17 @@ export class PaperclipClient {
     return this.request<IssueSummary>("/api/issues/"+encodeURIComponent(issueId));
   }
 
+  async listIssueComments(issueId: string): Promise<IssueCommentSummary[]> {
+    const params = new URLSearchParams({ order: "desc", limit: "50" });
+    const comments = await this.request<IssueCommentSummary[]>(
+      "/api/issues/" + encodeURIComponent(issueId) + "/comments?" + params,
+    );
+    if (!Array.isArray(comments) || comments.some(item =>
+      !item || typeof item.body !== "string" || typeof item.id !== "string")) {
+      throw new Error("Invalid Paperclip issue comments response");
+    }
+    return comments;
+  }
   async listIssueInteractions(issueId: string): Promise<IssueInteractionSummary[]> {
     const interactions = await this.request<IssueInteractionSummary[]>(
       "/api/issues/" + encodeURIComponent(issueId) + "/interactions",

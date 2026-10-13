@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { log } from "./logger.js";
 import { PaperclipClient } from "./paperclip-client.js";
 import { isWaitingOnHumanReview } from "./review-wait.js";
+import { readLatestCtoHandoff } from "./cto-handoff.js";
+import type { QuotaReport } from "./codex-quota-monitor.js";
 import type { IssueSummary, WatcherConfig, WatcherState } from "./types.js";
 import type { StateStore } from "./state.js";
 
@@ -65,7 +67,7 @@ export class PaperclipWatcher {
     return this.companyId;
   }
 
-  async pollOnce(): Promise<WatcherPollResult> {
+  async pollOnce(quota?: QuotaReport): Promise<WatcherPollResult> {
     const companyId = await this.company();
     const agent = await this.client.getAgent(this.config.ctoAgentId);
     if (agent.companyId !== companyId) throw new Error("CTO company mismatch");
@@ -92,45 +94,106 @@ export class PaperclipWatcher {
     const outstandingIssues = issues.filter(issue =>
       WORK.has(issue.status) && !humanReviews.has(issue.id),
     );
-    if (outstandingIssues.length > 0) {
-      // Preserve the ordinary blocker signature; when the last blocker
-      // becomes parked/human-owned, the eligible signature differs.
-      if (this.state === null) this.state = await this.stateStore.load();
-      const current = signature(issues);
-      if (this.state.lastHandledSignature !== current) {
-        this.state.lastHandledSignature = current;
-        await this.stateStore.save(this.state);
+    const report = {
+      assignedCount: issues.length,
+      outstandingCount: outstandingIssues.length,
+      parkedBacklogCount: backlogIds.length,
+      humanReviewCount: humanReviewIds.length,
+    };
+    const runs = await this.client.listAgentRuns(companyId, this.config.ctoAgentId);
+    if (runs.some(run => ACTIVE_RUNS.has(run.status))) {
+      return this.reset("active_or_retrying_run", issues.length);
+    }
+    if (runs.some(run => !ACTIVE_RUNS.has(run.status) && !["succeeded", ...FAILURE_RUNS].includes(run.status))) {
+      return this.reset("unknown_run_status", issues.length);
+    }
+    const latestRow = runs[0];
+    if (!latestRow) return this.reset("last_run_not_successful", issues.length);
+    // The Paperclip list endpoint is abbreviated; errorCode and contextSnapshot
+    // are not reliably present. Read the authoritative detail before resuming.
+    let latest = latestRow;
+    if (latestRow.status === "failed" || latestRow.status === "succeeded") {
+      try {
+        latest = await this.client.getHeartbeatRun(latestRow.id);
+        if (latest.agentId !== this.config.ctoAgentId) {
+          return this.reset("latest_run_agent_mismatch", issues.length);
+        }
+      } catch {
+        return this.reset("latest_run_detail_failed", issues.length);
       }
+    }
+
+    // A genuine human wait, with nothing independently actionable, is not
+    // a reason to wake the CTO repeatedly. Paperclip natively wakes the
+    // issue assignee when its saved interaction is answered.
+    const independent = issues.some(issue =>
+      issue.status === "todo" || issue.status === "in_progress" || issue.status === "backlog"
+    );
+    if (humanReviews.size > 0 && !independent && outstandingIssues.length === 0) {
+      return { state: "waiting_for_human", ...report };
+    }
+
+    // The CTO's simple, current-run handoff takes precedence over guesses
+    // from freeform run output. Never trust an older comment or another agent.
+    let handoff: "waiting" | "ready" | null = null;
+    if (latest.status === "succeeded" && (latest.contextSnapshot?.issueId || latest.contextSnapshot?.taskId || latest.nativeIssueId)) {
+      try {
+        handoff = await readLatestCtoHandoff(
+          this.client, latest.contextSnapshot?.issueId ?? latest.contextSnapshot?.taskId ?? latest.nativeIssueId,
+          latest.id, this.config.ctoAgentId,
+        );
+      } catch {
+        return this.reset("handoff_lookup_failed", issues.length);
+      }
+    }
+    // The marker is a hint, not a blanket shutdown switch. Require Paperclip
+    // to still show a verified unresolved human-owned review.
+    if (handoff === "waiting" && humanReviews.size > 0) {
+      return { state: "waiting_for_human", ...report };
+    }
+
+    // Checking local usage costs no tokens. Never wake when quota is exhausted
+    // or unverified, regardless of whether independent work looks available.
+    if (quota && quota.availability !== "available") {
+      return { state: quota.availability === "exhausted" ? "quota_exhausted" : "quota_unknown", ...report };
+    }
+
+    // Blocked parent campaigns can coexist with real independent CTO work.
+    // Give the CTO at most one bounded opportunity per unchanged work
+    // snapshot, but never invent a task or bypass an actual dependency.
+    const eligibleBlockedRecheck = independent &&
+      (latest.livenessState === "blocked" || handoff === "ready" ||
+       (latest.status === "failed" && latest.errorCode === "provider_quota" && quota?.availability === "available"));
+    if (outstandingIssues.length > 0 && !eligibleBlockedRecheck) {
       return {
         ...this.blockedResult("outstanding_issues", issues, outstandingIssues),
         parkedBacklogCount: backlogIds.length,
         humanReviewCount: humanReviewIds.length,
       };
     }
-    const passive = backlogIds.length > 0 || humanReviewIds.length > 0;
-    const report = {
-      assignedCount: issues.length,
-      outstandingCount: 0,
-      parkedBacklogCount: backlogIds.length,
-      humanReviewCount: humanReviewIds.length,
-    };
-    const runs = await this.client.listAgentRuns(companyId, this.config.ctoAgentId);
-    if (runs.some(run => ACTIVE_RUNS.has(run.status))) return this.reset("active_or_retrying_run", issues.length);
-    if (runs.some(run => !ACTIVE_RUNS.has(run.status) && !["succeeded", ...FAILURE_RUNS].includes(run.status))) {
-      return this.reset("unknown_run_status", issues.length);
+    if (!independent && outstandingIssues.length > 0) {
+      return this.blockedResult("outstanding_issues", issues, outstandingIssues);
     }
-    const mostRecent = runs[0];
-    if (!mostRecent || mostRecent.status !== "succeeded" || mostRecent.livenessState === "blocked") {
+
+    if (latest.livenessState === "blocked" && !independent) {
+      return { state: "last_run_blocked_without_work", ...report };
+    }
+    const quotaRecovery = quota?.availability === "available" && quota.recoveryEpoch > 0;
+    const quotaFailed = latest.status === "failed" && latest.errorCode === "provider_quota";
+    if (latest.status !== "succeeded" && !(quotaFailed && quota?.availability === "available")) {
       return this.reset("last_run_not_successful", issues.length);
     }
 
-    const sig = signature(issues, backlogIds, humanReviewIds);
+    // Version nonterminal eligibility separately from the legacy stored
+    // "blocked" snapshot, which was persisted even without a wake.
+    const baseSig = signature(issues, backlogIds, humanReviewIds) +
+      (independent || outstandingIssues.length > 0 ? ":continuation-v2" : "");
+    const sig = (quotaRecovery && independent)
+      ? baseSig + ":quota-recovered:" + quota!.recoveryEpoch : baseSig;
     if (this.state === null) this.state = await this.stateStore.load();
-    // Finished work is woken once per snapshot. Parked backlog and reviews
-    // waiting on humans may be re-woken after cooldown because no agent
-    // work is currently actionable. This keeps research moving while a
-    // human decision is outstanding, without 15-second wakeup storms.
-    if (!passive && this.state.lastHandledSignature === sig && this.state.lastWakeAt !== null) {
+    // Every unchanged snapshot can trigger at most one external wake.
+    // Never re-wake stable backlog/human reviews every five minutes.
+    if (this.state.lastHandledSignature === sig && this.state.lastWakeAt !== null) {
       return { state: "already_handled", ...report };
     }
     if (this.lastObservedSignature !== sig) {
@@ -150,10 +213,8 @@ export class PaperclipWatcher {
     this.state.lastWakeAt = this.now();
     if (!this.config.dryRun) {
       await this.stateStore.save(this.state);
-      // A parked snapshot can legitimately get multiple wakes over time.
-      // Give each bounded attempt its own idempotency key; the persisted
-      // lastWakeAt suppresses duplicate attempts on uncertain responses.
-      const wakeKey = "paperclip-watcher:idle:" + sig + (passive ? ":" + this.state.lastWakeAt : "");
+      // Stable snapshot = stable idempotency key across service restarts.
+      const wakeKey = "paperclip-watcher:idle:" + sig;
       const result = await this.client.wakeCto(this.config.ctoAgentId, wakeKey);
       log("info", "CTO wake requested", { resultStatus: result.status });
     }

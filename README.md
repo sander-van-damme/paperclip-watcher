@@ -8,9 +8,9 @@ The service observes the CTO's assigned Paperclip issues and recent heartbeat ru
 
 `backlog` is intentionally parked work with no immediate execution expectation and **does not block** a CTO wake. `in_review` is allowed only when Paperclip explicitly identifies the next step as human-owned (a human reviewer, human execution-stage participant, human-addressed/policy-limited interaction or pending formal approval). For agent-owned, ambiguous, or stalled reviews, the watcher still waits.
 
-When all assigned work is `done` or `cancelled`, there is one wake per changed snapshot. While there is parked backlog or verified human-owned review work, the watcher can request **another** heartbeat after the five-minute cooldown so the CTO can research something else instead of waiting on people. This is not a 15-second wake loop; the last successful run must still satisfy all guards. Unknown issue statuses fail closed.
+When all assigned work is `done` or `cancelled`, there is one wake per changed snapshot. A newly parked backlog can allow **one** research continuation after the idle grace period. A genuine human-only review does **not** trigger another wake on its own. An unchanged task snapshot never causes repeated five-minute wakes. When a CTO run reports a blocker but other actionable tasks remain, the watcher can make one bounded continuation attempt per changed snapshot. A verified same-run `WATCHER: WAITING_FOR_HUMAN` handoff suppresses that attempt. Unknown issue statuses fail closed.
 
-The latest CTO run must have `succeeded`; failed, interrupted, timed-out, cancelled or blocked runs do not trigger automatic retries. Rate-limited pending/retrying tasks should therefore not cause wake loops. The agent itself must be `active` or `idle`. The service does **not** independently parse provider rate-limit logs.
+The latest CTO run must normally have `succeeded`. A successful but human-blocked run is not a provider failure; a changed snapshot with independent work may receive one bounded continuation. Failed/interrupted/timed-out/cancelled runs still do not trigger normal automatic retries. Confirmed `provider_quota` failures can recover **once** when the optional local Codex quota monitor verifies included usage is available and no native Paperclip retry is queued. Rate-limited pending/retrying tasks do not cause extra wake loops. The agent itself must be `active` or `idle`. The service does **not** independently parse provider rate-limit logs.
 
 The check repeats every 15 seconds (configurable). An eligible idle state must remain stable for 60 seconds, with a five-minute cooldown between wakes. A state file records handled issue signatures and wake timestamps across service restarts. On first start, even when the CTO's assigned tasks were already terminal, the watcher may request **one** wake after the idle grace period, provided every other safety gate passes. Already-handled snapshots are not woken again after service restarts. Old watcher state files that recorded a terminal baseline without a wake are automatically eligible for this one-time catch-up. State changes are logged once (including reasons why a wake is suppressed), rather than on every poll. Paperclip's existing hourly timer can remain as a fallback.
 
@@ -81,3 +81,93 @@ The watcher does not mark issues done or modify Paperclip's queues.
 The `outstanding_issues` log reports `assignedCount` (all CTO-assigned tasks) separately from `outstandingCount` (tasks that are actionable, blocked, or have unresolved/agent-owned reviews). A `parkedBacklogCount` and `humanReviewCount` describe safe waits that do not block. `outstandingIssues` includes each blocking issue's LAB identifier, title and status, up to 30 entries; `omittedOutstandingCount` reports any remaining blockers. Changes to that list produce a new log entry, even when the state name stays the same.
 
 To see the complete current list in the Paperclip CLI, run `paperclipai issue list --company-id COMPANY_UUID --assignee-agent-id CTO_UUID --status backlog,todo,in_progress,in_review,blocked`. A blocked parent campaign assigned to the CTO is a blocker even if its children have finished.
+
+## Owner notifications via Pushover (opt-in)
+
+The watcher now supports **Pushover notifications** for new human-owned `in_review` paths on CTO-assigned Paperclip issues. Notifications are deduplicated across restarts. An open question uses Paperclip's native interaction and `wake_assignee` behavior; **tapping** the Pushover push opens the right Paperclip issue so the owner can answer in the browser. Pushover itself is not a reply channel.
+
+The owner already has Cloudflare Tunnel at **https://shapedisplay.sandervandamme.net**. Protect that hostname with **Cloudflare Access**, restricted to the owner. The allowed-hostname setting on Paperclip is not authentication. A browser login through Access may be necessary. Never expose Paperclip's trusted local admin mode without this boundary.
+
+In the private server-side `.env` (never GitHub) set:
+
+```ini
+PAPERCLIP_WATCHER_PUSHOVER_TOKEN=your-pushover-application-api-token
+PAPERCLIP_WATCHER_PUSHOVER_USER=your-pushover-user-key
+PAPERCLIP_WATCHER_PUSHOVER_PAPERCLIP_URL=https://shapedisplay.sandervandamme.net
+# Optional if several Paperclip board users share an instance:
+# PAPERCLIP_WATCHER_PUSHOVER_USER_ID=your-exact-paperclip-user-id
+```
+
+Run `npm run pushover:test` for one real notification, then `npm run check` and
+`npm run install-service` to update the systemd deployment. The Pushover push
+has normal priority and deep-links to `/LAB/issues/LAB-...`. The notifier uses
+Paperclip's verified human-owned review paths; it does not notify for unstructured
+comments, generic statuses, or arbitrary agent questions.
+
+## Local Codex quota monitor (opt-in; no model turns)
+
+Codex's **local App Server** supplies personal used percentages, quota windows,
+and backend permission via `account/rateLimits/read`. The watcher invokes
+`codex app-server` via read-only JSON-RPC every 10 minutes by default, under
+the same Linux user and Codex login as the Paperclip CTO. No model generation,
+API key, credit redemption, or public reset predictor is involved.
+`codex-resets.com` cannot confirm the quota on your account and is not
+needed for the first reliable implementation.
+
+Add these settings to the server-side private `.env`:
+
+```ini
+PAPERCLIP_WATCHER_CODEX_QUOTA_ENABLED=true
+# Optional, if `codex` isn't on systemd's PATH:
+# PAPERCLIP_WATCHER_CODEX_BIN=/absolute/path/to/codex
+# Optional account pin to fail closed on mismatched Codex accounts:
+# PAPERCLIP_WATCHER_CODEX_ACCOUNT_ID=the-known-codex-account-id
+PAPERCLIP_WATCHER_CODEX_QUOTA_INTERVAL_MS=600000
+```
+
+Run `npm run quota:check`: it prints only `availability` and a short reason,
+not credentials. A returned `unknown` is **not** proof of a reset. The
+watcher **never** initiates additional wakes on an unknown or exhausted quota;
+ordinary Paperclip scheduled retries are preserved. A confirmed exhausted →
+available transition is persisted and permits at most one new wake per
+unchanged eligible work snapshot. It does not wake work waiting only on a person.
+
+## Simple CTO handoff
+
+When genuine human input is required, the CTO creates a saved native Paperclip
+interaction, leaves the owning task `in_review`, and can continue independent,
+valuable research on other tasks. At the end of the **same CTO run's issue
+comment**, optionally include exactly one of these lines:
+
+```text
+WATCHER: READY
+WATCHER: WAITING_FOR_HUMAN
+```
+
+`READY` requires a concrete independent next action described in that comment.
+`WAITING_FOR_HUMAN` means the CTO found **no** useful independent work after
+surveying its assigned work. The watcher only honors this marker from a
+verified CTO-authored comment linked to the latest run. The native Paperclip
+statuses and the actual human interaction remain authoritative.
+
+The watcher conservatively allows at most one extra wake when a blocked
+successful run still has independently actionable work, and otherwise
+deduplicates by task snapshot and quota recovery epoch. It never creates
+tasks or changes issue statuses. Active/retrying native Paperclip runs win.
+
+## Deployment and validation
+
+1. Install Pushover settings and (optionally) enable Codex quota in the **private
+   server-side** `.env`; never commit or paste tokens.
+2. Ensure `codex app-server` is accessible with the CTO's authenticated Linux
+   user: `npm run quota:check` if quota monitor enabled.
+3. Check your Cloudflare Access policy, then `npm run pushover:test` and click
+   the notification's Paperclip URL on your phone.
+4. Run `npm run check`; reinstall/restart systemd with `npm run install-service`.
+   Verify `npm run service:status` and `npm run service:logs`.
+5. Verify a real pending human question triggers **one** push and no repeated
+   CTO wake while unanswered. Check recovery on a later quota reset.
+
+Changing the GitHub CTO prompt does **not** automatically update the running
+Paperclip CTO unless its short live instructions actually load the current
+repository prompt. Verify this linkage before depending on the handoff marker.

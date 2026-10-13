@@ -36,6 +36,21 @@ export function loadConfig(): WatcherConfig {
 
   const companyId = process.env.PAPERCLIP_COMPANY_ID?.trim() || undefined;
   const ceoAgentId = process.env.PAPERCLIP_CEO_AGENT_ID?.trim() || undefined;
+  const quotaEnabled = booleanEnv("PAPERCLIP_WATCHER_CODEX_QUOTA_ENABLED");
+  const codexExecutable = process.env.PAPERCLIP_WATCHER_CODEX_BIN?.trim() || "codex";
+  const codexExpectedAccount = process.env.PAPERCLIP_WATCHER_CODEX_ACCOUNT_ID?.trim();
+  const pushToken = process.env.PAPERCLIP_WATCHER_PUSHOVER_TOKEN?.trim();
+  const pushUser = process.env.PAPERCLIP_WATCHER_PUSHOVER_USER?.trim();
+  const pushUrl = process.env.PAPERCLIP_WATCHER_PUSHOVER_PAPERCLIP_URL?.trim() || (pushToken ? "https://shapedisplay.sandervandamme.net" : undefined);
+  const pushUserId = process.env.PAPERCLIP_WATCHER_PUSHOVER_USER_ID?.trim();
+  if ([pushToken, pushUser].some(Boolean) && ![pushToken, pushUser].every(Boolean)) {
+    throw new Error("Pushover requires both PAPERCLIP_WATCHER_PUSHOVER_TOKEN and PAPERCLIP_WATCHER_PUSHOVER_USER");
+  }
+  if (pushUrl) {
+    const url = new URL(pushUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password ||
+        url.search || url.hash) throw new Error("Invalid PAPERCLIP_WATCHER_PUSHOVER_PAPERCLIP_URL");
+  }
   const taskWatchdogMaxAttachmentsPerPoll = positiveInt("PAPERCLIP_WATCHER_TASK_WATCHDOG_MAX_ATTACHMENTS_PER_POLL", 1);
   if (taskWatchdogMaxAttachmentsPerPoll > 20) {
     throw new Error("PAPERCLIP_WATCHER_TASK_WATCHDOG_MAX_ATTACHMENTS_PER_POLL must be <= 20");
@@ -56,6 +71,15 @@ export function loadConfig(): WatcherConfig {
     taskWatchdogScanIntervalMs: positiveInt("PAPERCLIP_WATCHER_TASK_WATCHDOG_SCAN_INTERVAL_MS", 60_000),
     taskWatchdogMaxAttachmentsPerPoll,
     taskWatchdogInstructions,
+    ...(quotaEnabled ? { codexQuota: {
+      executable: codexExecutable,
+      intervalMs: positiveInt("PAPERCLIP_WATCHER_CODEX_QUOTA_INTERVAL_MS", 600_000),
+      ...(codexExpectedAccount ? { expectedAccountId: codexExpectedAccount } : {}),
+    }} : {}),
+    ...(pushToken && pushUser && pushUrl ? { pushover: {
+      token: pushToken, user: pushUser, baseUrl: pushUrl.endsWith("/") ? pushUrl.slice(0, -1) : pushUrl,
+      ...(pushUserId ? { userId: pushUserId } : {}),
+    }} : {}),
     pollIntervalMs: positiveInt("PAPERCLIP_WATCHER_POLL_INTERVAL_MS", 15_000),
     requestTimeoutMs: positiveInt("PAPERCLIP_WATCHER_REQUEST_TIMEOUT_MS", 10_000),
     pageSize,
