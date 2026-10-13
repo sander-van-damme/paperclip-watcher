@@ -113,7 +113,7 @@ export class PaperclipWatcher {
     // are not reliably present. Read the authoritative detail before resuming.
     let latest = latestRow;
     if (latestRow.status === "failed" ||
-        (latestRow.status === "succeeded" && outstandingIssues.length > 0)) {
+        (latestRow.status === "succeeded" && independent)) {
       try {
         latest = await this.client.getHeartbeatRun(latestRow.id);
         if (latest.agentId !== this.config.ctoAgentId) {
