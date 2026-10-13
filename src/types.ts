@@ -43,7 +43,7 @@ export interface IssueRunSummary {
   scheduledRetryAt?: string | null;
 }
 export interface HeartbeatRunSummary {
-  id: string; agentId: string; status: string; livenessState?: string | null;
+  id: string; agentId: string; status: string; livenessState?: string | null; errorCode?: string | null; contextSnapshot?: { issueId?: string | null } | null;
 }
 export interface WakeupResponse { id?: string; status: string; reason?: string | null; }
 export interface TaskWatchdogSummary {
@@ -54,6 +54,11 @@ export interface TaskWatchdogSummary {
 }
 export interface WatcherState { lastHandledSignature: string | null; lastWakeAt: number | null; }
 export interface PushoverConfig { token: string; user: string; baseUrl: string; userId?: string; }
+export interface CodexQuotaConfig {
+  executable: string;
+  intervalMs: number;
+  expectedAccountId?: string;
+}
 export interface WatcherConfig {
   apiUrl: string; apiKey: string; ctoAgentId: string; companyId?: string;
   pollIntervalMs: number; requestTimeoutMs: number; pageSize: number;
@@ -63,4 +68,5 @@ export interface WatcherConfig {
   taskWatchdogMaxAttachmentsPerPoll: number;
   taskWatchdogInstructions: string;
   pushover?: PushoverConfig;
+  codexQuota?: CodexQuotaConfig;
 }
