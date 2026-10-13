@@ -126,7 +126,21 @@ PAPERCLIP_WATCHER_CODEX_QUOTA_INTERVAL_MS=600000
 ```
 
 Run `npm run quota:check`: it prints only `availability` and a short reason,
-not credentials. A returned `unknown` is **not** proof of a reset. The
+not credentials.
+The local quota probe follows Codex's sequential JSON-RPC handshake and keeps
+stdin open until it receives `account/rateLimits/read`. On errors the CLI emits
+a **safe failure category**, never raw app-server responses or private auth data.
+Examples: `binary_not_found` (check `command -v codex` or set
+`PAPERCLIP_WATCHER_CODEX_BIN`), `initialize_rejected` (check Codex CLI version),
+`rate_limits_rejected` (check `codex login status`), and `connection_closed`
+(check that `codex app-server` starts correctly). Always first run the probe as
+the same Linux user/account that executes CTO Codex.
+
+After updating from GitHub, run `npm run quota:check` **before** restarting the
+watcher with `PAPERCLIP_WATCHER_CODEX_QUOTA_ENABLED=true`. An unresolved probe
+failure means quota is unknown; to avoid suspending independent work, set
+`PAPERCLIP_WATCHER_CODEX_QUOTA_ENABLED=false` until the probe works.
+ A returned `unknown` is **not** proof of a reset. The
 watcher **never** initiates additional wakes on an unknown or exhausted quota;
 ordinary Paperclip scheduled retries are preserved. A confirmed exhausted →
 available transition is persisted and permits at most one new wake per
