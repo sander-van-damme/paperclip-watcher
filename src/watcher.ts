@@ -138,7 +138,8 @@ export class PaperclipWatcher {
     // Give the CTO at most one bounded opportunity per unchanged work
     // snapshot, but never invent a task or bypass an actual dependency.
     const eligibleBlockedRecheck = independent &&
-      (latest.livenessState === "blocked" || handoff === "ready");
+      (latest.livenessState === "blocked" || handoff === "ready" ||
+       (latest.status === "failed" && latest.errorCode === "provider_quota" && quota?.availability === "available"));
     if (outstandingIssues.length > 0 && !eligibleBlockedRecheck) {
       return {
         ...this.blockedResult("outstanding_issues", issues, outstandingIssues),
@@ -150,6 +151,9 @@ export class PaperclipWatcher {
       return this.blockedResult("outstanding_issues", issues, outstandingIssues);
     }
 
+    if (latest.livenessState === "blocked" && !independent) {
+      return { state: "last_run_blocked_without_work", ...report };
+    }
     const quotaRecovery = quota?.availability === "available" && quota.recoveryEpoch > 0;
     const quotaFailed = latest.status === "failed" && latest.errorCode === "provider_quota";
     if (latest.status !== "succeeded" && !(quotaFailed && quota?.availability === "available")) {
