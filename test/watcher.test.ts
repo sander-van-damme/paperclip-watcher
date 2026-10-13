@@ -297,7 +297,7 @@ test("CTO's same-run WAITING_FOR_HUMAN handoff vetoes even an apparent ready tas
   r.setLiveness("blocked");
   r.setRunIssue("task");
   r.setComments([{id:"comment",authorAgentId:"cto",createdByRunId:"run",
-    body:"Tests cannot proceed without human input.\\nWATCHER: WAITING_FOR_HUMAN"}]);
+    body:"WATCHER: WAITING_FOR_HUMAN"}]);
   r.setIssues("in_progress");
   assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
   r.advance(600000);
