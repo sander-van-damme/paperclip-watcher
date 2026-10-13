@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { QuotaAvailability, QuotaSnapshot } from "./codex-quota.js";
 
 export interface QuotaMonitorState {
@@ -39,7 +39,7 @@ export class CodexQuotaMonitor {
     return this.previous = v;
   }
   private async save(): Promise<void> {
-    await mkdir(join(this.path, ".."), { recursive: true, mode: 0o700 });
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     const tmp = this.path + "." + randomUUID() + ".tmp";
     await writeFile(tmp, JSON.stringify(this.previous) + "\n", { mode: 0o600, flag: "wx" });
     await rename(tmp, this.path);
