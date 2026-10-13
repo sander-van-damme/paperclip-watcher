@@ -17,7 +17,9 @@
     "service:status": "systemctl status paperclip-watcher.service --no-pager",
     "service:logs": "journalctl -u paperclip-watcher.service -f",
     "export": "npm run build && node --env-file=.env dist/export-cli.js",
-    "check:installer": "node --check scripts/install-service.mjs"
+    "check:installer": "node --check scripts/install-service.mjs",
+    "quota:check": "npm run build && node --env-file=.env dist/codex-quota-cli.js",
+    "pushover:test": "npm run build && node --env-file=.env dist/pushover-test-cli.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
