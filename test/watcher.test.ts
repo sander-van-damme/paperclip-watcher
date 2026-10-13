@@ -31,7 +31,14 @@ function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: Watch
     if (path.endsWith("/api/issues/task")) return Response.json({
       ...issues[0], companyId:"company",
     });
-    if (path.includes("/heartbeat-runs?")) return Response.json([{id:"run",agentId:"cto",status:runStatus,livenessState:liveness,errorCode:runError,contextSnapshot:runIssue ? {issueId:runIssue} : null}]);
+    // Paperclip's list can omit errorCode/contextSnapshot; only run detail is authoritative.
+    if (path.endsWith("/api/heartbeat-runs/run")) return Response.json({
+      id:"run",agentId:"cto",status:runStatus,livenessState:liveness,
+      errorCode:runError,contextSnapshot:runIssue ? {issueId:runIssue} : null,
+    });
+    if (path.includes("/heartbeat-runs?")) return Response.json([{
+      id:"run",agentId:"cto",status:runStatus,livenessState:liveness,
+    }]);
     if (path.endsWith("/wakeup") && opts?.method === "POST") {wakes++; return Response.json({id:"wake",status:"queued"});}
     throw new Error("Unexpected path " + path);
   };
