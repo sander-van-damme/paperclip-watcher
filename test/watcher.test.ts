@@ -16,6 +16,10 @@ const config: WatcherConfig = {
 function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: WatcherState) {
   let issues: IssueSummary[] = [{ id: "task", status: "in_progress", assigneeAgentId: "cto" }];
   let now = 0, wakes = 0;
+  let liveness = "completed";
+  let runError: string | null = null;
+  let runIssue: string | null = null;
+  let comments: Array<{id:string;body:string;authorAgentId:string;createdByRunId:string}> = [];
   let interactions: IssueInteractionSummary[] = [];
   let saved: WatcherState = initialState ? {...initialState} : {lastHandledSignature: null, lastWakeAt: null};
   const fetcher: typeof fetch = async (url, opts) => {
@@ -23,10 +27,11 @@ function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: Watch
     if (path.endsWith("/api/agents/cto")) return Response.json({id:"cto",companyId:"company",status:agentStatus});
     if (path.includes("/issues?")) return Response.json(issues);
     if (path.endsWith("/api/issues/task/interactions")) return Response.json(interactions);
+    if (path.endsWith("/api/issues/task/comments?order=desc&limit=50")) return Response.json(comments);
     if (path.endsWith("/api/issues/task")) return Response.json({
       ...issues[0], companyId:"company",
     });
-    if (path.includes("/heartbeat-runs?")) return Response.json([{id:"run",agentId:"cto",status:runStatus,livenessState:"completed"}]);
+    if (path.includes("/heartbeat-runs?")) return Response.json([{id:"run",agentId:"cto",status:runStatus,livenessState:liveness,errorCode:runError,contextSnapshot:runIssue ? {issueId:runIssue} : null}]);
     if (path.endsWith("/wakeup") && opts?.method === "POST") {wakes++; return Response.json({id:"wake",status:"queued"});}
     throw new Error("Unexpected path " + path);
   };
@@ -40,6 +45,10 @@ function rig(runStatus = "succeeded", agentStatus = "idle", initialState?: Watch
     setIssuesData: (value: IssueSummary[]) => { issues = value; },
     setInteractions: (value: IssueInteractionSummary[]) => { interactions = value; },
     advance: (ms: number) => {now += ms;}, wakes: () => wakes,
+    setLiveness: (v: string) => {liveness=v;},
+    setRunError: (v: string) => {runError=v;},
+    setRunIssue: (v: string | null) => {runIssue=v;},
+    setComments: (v: typeof comments) => {comments=v;},
   };
 }
 
@@ -264,4 +273,73 @@ test("parked eligibility invalidates the old blocked baseline on upgrade", async
   r.advance(300002);
   assert.equal((await r.watcher.pollOnce()).state,"woken");
   assert.equal(r.wakes(),1);
+});
+
+test("blocked successful CTO run may explore independent work once, never loop", async () => {
+  const r=rig();
+  r.setLiveness("blocked");
+  r.setIssuesData([
+    {id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"owner"}]}},
+    {id:"independent",status:"todo",assigneeAgentId:"cto"},
+    {id:"parent",status:"blocked",assigneeAgentId:"cto"},
+  ]);
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  r.advance(600000);
+  assert.equal((await r.watcher.pollOnce()).state,"already_handled");
+  assert.equal(r.wakes(),1);
+});
+
+test("CTO's same-run WAITING_FOR_HUMAN handoff vetoes even an apparent ready task", async () => {
+  const r=rig();
+  r.setLiveness("blocked");
+  r.setRunIssue("task");
+  r.setComments([{id:"comment",authorAgentId:"cto",createdByRunId:"run",
+    body:"Tests cannot proceed without human input.\\nWATCHER: WAITING_FOR_HUMAN"}]);
+  r.setIssues("in_progress");
+  assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
+  r.advance(600000);
+  assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
+  assert.equal(r.wakes(),0);
+});
+
+test("an older or foreign handoff cannot suppress a new CTO run", async () => {
+  const r=rig();
+  r.setLiveness("blocked");
+  r.setRunIssue("task");
+  r.setComments([{id:"comment",authorAgentId:"other",createdByRunId:"run",
+    body:"WATCHER: WAITING_FOR_HUMAN"}]);
+  r.setIssues("in_progress");
+  assert.equal((await r.watcher.pollOnce()).state,"settling");
+});
+
+test("quota exhausted/unknown suppress new wake; recovery permits one resume without retries", async () => {
+  const r=rig("failed");
+  r.setRunError("provider_quota");
+  r.setIssues("todo");
+  const status=(availability: "exhausted"|"available"|"unknown",recoveryEpoch=0)=>
+    ({availability,recoveryEpoch,reason:"test"});
+  assert.equal((await r.watcher.pollOnce(status("exhausted"))).state,"quota_exhausted");
+  assert.equal((await r.watcher.pollOnce(status("unknown"))).state,"quota_unknown");
+  assert.equal((await r.watcher.pollOnce(status("available",1))).state,"settling");
+  r.advance(60000);
+  assert.equal((await r.watcher.pollOnce(status("available",1))).state,"woken");
+  r.advance(600000);
+  assert.equal((await r.watcher.pollOnce(status("available",1))).state,"already_handled");
+  assert.equal(r.wakes(),1);
+});
+
+test("quota recovery does not wake a CTO when only a human review is outstanding", async () => {
+  const r=rig();
+  r.setIssuesData([{
+    id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+    reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"owner"}]},
+  }]);
+  const report={availability:"available" as const,recoveryEpoch:12,reason:"backend_allows_usage"};
+  assert.equal((await r.watcher.pollOnce(report)).state,"waiting_for_human");
+  r.advance(600000);
+  assert.equal((await r.watcher.pollOnce(report)).state,"waiting_for_human");
+  assert.equal(r.wakes(),0);
 });
