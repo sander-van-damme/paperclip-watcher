@@ -69,7 +69,7 @@ export function loadConfig(): WatcherConfig {
     taskWatchdogMaxAttachmentsPerPoll,
     taskWatchdogInstructions,
     ...(pushToken && pushUser && pushUrl ? { pushover: {
-      token: pushToken, user: pushUser, baseUrl: pushUrl.replace(/\\/+$/, ""),
+      token: pushToken, user: pushUser, baseUrl: pushUrl.endsWith("/") ? pushUrl.slice(0, -1) : pushUrl,
       ...(pushUserId ? { userId: pushUserId } : {}),
     }} : {}),
     pollIntervalMs: positiveInt("PAPERCLIP_WATCHER_POLL_INTERVAL_MS", 15_000),
