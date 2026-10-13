@@ -34,6 +34,17 @@ export class PaperclipClient {
     return this.request<IssueSummary>("/api/issues/"+encodeURIComponent(issueId));
   }
 
+  async listIssueComments(issueId: string): Promise<IssueCommentSummary[]> {
+    const params = new URLSearchParams({ order: "desc", limit: "50" });
+    const comments = await this.request<IssueCommentSummary[]>(
+      "/api/issues/" + encodeURIComponent(issueId) + "/comments?" + params,
+    );
+    if (!Array.isArray(comments) || comments.some(item =>
+      !item || typeof item.body !== "string" || typeof item.id !== "string")) {
+      throw new Error("Invalid Paperclip issue comments response");
+    }
+    return comments;
+  }
   async listIssueInteractions(issueId: string): Promise<IssueInteractionSummary[]> {
     const interactions = await this.request<IssueInteractionSummary[]>(
       "/api/issues/" + encodeURIComponent(issueId) + "/interactions",
