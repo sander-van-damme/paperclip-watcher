@@ -53,6 +53,7 @@ export interface TaskWatchdogSummary {
   status: string;
 }
 export interface WatcherState { lastHandledSignature: string | null; lastWakeAt: number | null; }
+export interface PushoverConfig { token: string; user: string; baseUrl: string; userId?: string; }
 export interface WatcherConfig {
   apiUrl: string; apiKey: string; ctoAgentId: string; companyId?: string;
   pollIntervalMs: number; requestTimeoutMs: number; pageSize: number;
@@ -61,4 +62,5 @@ export interface WatcherConfig {
   taskWatchdogScanIntervalMs: number;
   taskWatchdogMaxAttachmentsPerPoll: number;
   taskWatchdogInstructions: string;
+  pushover?: PushoverConfig;
 }
