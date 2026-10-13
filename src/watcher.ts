@@ -146,7 +146,11 @@ export class PaperclipWatcher {
         return this.reset("handoff_lookup_failed", issues.length);
       }
     }
-    if (handoff === "waiting") return { state: "waiting_for_human", ...report };
+    // The marker is a hint, not a blanket shutdown switch. Require Paperclip
+    // to still show a verified unresolved human-owned review.
+    if (handoff === "waiting" && humanReviews.size > 0) {
+      return { state: "waiting_for_human", ...report };
+    }
 
     // Checking local usage costs no tokens. Never wake when quota is exhausted
     // or unverified, regardless of whether independent work looks available.
