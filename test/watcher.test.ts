@@ -305,7 +305,11 @@ test("CTO's same-run WAITING_FOR_HUMAN handoff vetoes even an apparent ready tas
   r.setRunIssue("task");
   r.setComments([{id:"comment",authorAgentId:"cto",createdByRunId:"run",
     body:"WATCHER: WAITING_FOR_HUMAN"}]);
-  r.setIssues("in_progress");
+  r.setIssuesData([
+    {id:"task",companyId:"company",status:"in_progress",assigneeAgentId:"cto"},
+    {id:"human",companyId:"company",status:"in_review",assigneeAgentId:"cto",
+      reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"owner"}]}},
+  ]);
   assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
   r.advance(600000);
   assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
