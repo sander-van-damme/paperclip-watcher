@@ -81,3 +81,25 @@ The watcher does not mark issues done or modify Paperclip's queues.
 The `outstanding_issues` log reports `assignedCount` (all CTO-assigned tasks) separately from `outstandingCount` (tasks that are actionable, blocked, or have unresolved/agent-owned reviews). A `parkedBacklogCount` and `humanReviewCount` describe safe waits that do not block. `outstandingIssues` includes each blocking issue's LAB identifier, title and status, up to 30 entries; `omittedOutstandingCount` reports any remaining blockers. Changes to that list produce a new log entry, even when the state name stays the same.
 
 To see the complete current list in the Paperclip CLI, run `paperclipai issue list --company-id COMPANY_UUID --assignee-agent-id CTO_UUID --status backlog,todo,in_progress,in_review,blocked`. A blocked parent campaign assigned to the CTO is a blocker even if its children have finished.
+
+## Pushover for owner input (opt-in)
+
+Set `PAPERCLIP_WATCHER_PUSHOVER_TOKEN`, `PAPERCLIP_WATCHER_PUSHOVER_USER`, and
+`PAPERCLIP_WATCHER_PUSHOVER_PAPERCLIP_URL` in the private `.env` file.
+The URL should be reachable from the phone, e.g. through Tailscale.
+Optionally set `PAPERCLIP_WATCHER_PUSHOVER_USER_ID` to restrict direct review
+and interaction notifications to a particular Paperclip user. Formal approvals
+without verifiable user ownership are skipped with this filter.
+
+The service scans every 60 seconds and sends a normal-priority Pushover message
+on a newly detected verified human-owned `in_review` path. The push includes
+a deep link to the Paperclip issue; answering happens within Paperclip, **not**
+within Pushover. Notifications are deduplicated across restarts in
+`human-input-notifications.json`. This feature does not wake agents, change
+tasks, or spend model tokens. It does not yet cover ad-hoc questions in comments,
+or every kind of approval outside CTO-owned `in_review` issues.
+
+Pushover secrets must remain outside Git. Use `npm run install-service`
+after changing the deployed .env file, then inspect service logs. A dry-run
+facility for notifications is not implemented: setting valid Pushover credentials
+will send actual pushes when outstanding human reviews are found.
