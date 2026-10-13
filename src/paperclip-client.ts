@@ -1,4 +1,4 @@
-import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, TaskWatchdogSummary, IssueInteractionSummary, IssueRunSummary, WatcherConfig } from "./types.js";
+import type { AgentSummary, IssueSummary, HeartbeatRunSummary, WakeupResponse, TaskWatchdogSummary, IssueInteractionSummary, IssueRunSummary, IssueCommentSummary, WatcherConfig } from "./types.js";
 export type FetchLike = typeof fetch;
 export class HttpError extends Error {
   constructor(message: string, readonly status: number, readonly body: string) {
