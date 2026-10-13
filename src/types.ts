@@ -11,6 +11,12 @@ export interface IssueExecutionState {
   status: string;
   currentParticipant: {type: string; userId?: string | null; agentId?: string | null} | null;
 }
+export interface IssueCommentSummary {
+  id: string;
+  body: string;
+  authorAgentId?: string | null;
+  createdByRunId?: string | null;
+}
 export interface IssueInteractionSummary {
   id: string;
   status: string;
