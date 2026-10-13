@@ -22,8 +22,7 @@ export function interpretCodexQuota(response: unknown, expectedAccountId?: strin
   const accountId = typeof data.accountId === "string" && data.accountId ? data.accountId : null;
   if (expectedAccountId && accountId !== expectedAccountId) return unknown("account_mismatch");
   const buckets = record(data.rateLimitsByLimitId);
-  const bucket = (buckets && buckets.codex !== undefined)
-    ? record(buckets.codex) : record(data.rateLimits);
+  const bucket = buckets ? record(buckets.codex) : record(data.rateLimits);
   if (!bucket) return unknown("missing_codex_bucket");
   if (data.ordinaryUsageAllowed === false || bucket.spendControlReached === true ||
       (typeof bucket.rateLimitReachedType === "string" && bucket.rateLimitReachedType.length > 0)) {
