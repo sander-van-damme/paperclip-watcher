@@ -151,24 +151,16 @@ test("a running CTO is busy, not unavailable, and must not receive another wake"
   assert.equal(r.wakes(),0);
 });
 
-test("backlog is parked and permits bounded recurring CTO heartbeats", async () => {
-  const r=rig();
+test("backlog permits one CTO wake per snapshot and never repeats on cooldown", async () => {
+  const r = rig();
   r.setIssues("backlog");
   assert.equal((await r.watcher.pollOnce()).state,"settling");
   r.advance(60000);
-  let result=await r.watcher.pollOnce();
-  assert.equal(result.state,"woken");
-  assert.equal(result.parkedBacklogCount,1);
-  assert.equal(result.outstandingCount,0);
-  assert.equal(r.wakes(),1);
-  r.advance(60000);
-  assert.equal((await r.watcher.pollOnce()).state,"settling");
-  r.advance(60000);
-  assert.equal((await r.watcher.pollOnce()).state,"cooldown");
-  assert.equal(r.wakes(),1);
-  r.advance(180000);
   assert.equal((await r.watcher.pollOnce()).state,"woken");
-  assert.equal(r.wakes(),2);
+  assert.equal(r.wakes(),1);
+  r.advance(600000);
+  assert.equal((await r.watcher.pollOnce()).state,"already_handled");
+  assert.equal(r.wakes(),1);
 });
 
 test("a backlog does not bypass actual actionable CTO work", async () => {
@@ -190,12 +182,12 @@ test("human-reviewer review path allows CTO to proceed", async () => {
     id:"task",companyId:"company",status:"in_review",assigneeAgentId:"cto",
     reviewAttention:{state:"covered",paths:[{kind:"human_reviewer",ref:"board-user"}]},
   }]);
-  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
   r.advance(60000);
   const result=await r.watcher.pollOnce();
-  assert.equal(result.state,"woken");
+  assert.equal(result.state,"waiting_for_human");
   assert.equal(result.humanReviewCount,1);
-  assert.equal(r.wakes(),1);
+  assert.equal(r.wakes(),0);
 });
 
 test("human execution participant is verified using authoritative issue detail", async () => {
@@ -205,9 +197,9 @@ test("human execution participant is verified using authoritative issue detail",
     executionState:{status:"pending",currentParticipant:{type:"user",userId:"reviewer"}},
     reviewAttention:{state:"covered",paths:[{kind:"execution_participant",ref:"reviewer"}]},
   }]);
-  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
   r.advance(60000);
-  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
 });
 
 test("human-only interactions and formal approvals are human review paths", async () => {
@@ -223,9 +215,9 @@ test("human-only interactions and formal approvals are human review paths", asyn
     id:"interaction-1",status:"pending",
     effectiveResolverPolicy:"human_only",addresseeAgentId:null,
   }]);
-  assert.equal((await r.watcher.pollOnce()).state,"settling");
+  assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
   r.advance(60000);
-  assert.equal((await r.watcher.pollOnce()).state,"woken");
+  assert.equal((await r.watcher.pollOnce()).state,"waiting_for_human");
 });
 
 test("agent review and unknown review paths still block", async () => {
